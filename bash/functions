@@ -45,47 +45,6 @@ function wide() {
 
 function hili() { grep -e '^' -e "$*"; }
 
-function _checkolmail() {
-    local f=$MAIL_NOTIFY_FILE
-    local flast=$f.lastcheck
-
-    [[ -f $f ]] && {
-        unread=$(awk '{ nlines++ } END { print nlines }' $f)
-
-        case ${unread:-0} in
-        (0) ;;
-        (1) echo "You have an unread mail in your Outlook Inbox" ;;
-        (*) echo "You have '$unread' unread mail items in your Outlook Inbox" ;;
-        esac
-        mv $f $flast
-    }
-}
-
-function olmail() {
-    local f=$MAIL_NOTIFY_FILE
-    local flast=$f.lastcheck
-
-    _checkolmail
-
-    [[ -f $flast ]] && {
-        i=1
-        printf "%3s %-50s %s\n" " " "Sender" "Subject"
-        for (( i = 0 ; i < 62 ; ++i )) ; do 
-            printf "="
-        done
-        echo
-        while read sender subj ; do
-            printf "%3d %-50s %s\n" "$i" "$sender" "$subj"
-            (( i++ ))
-        done < $flast
-    }
-    rm -f $f $flast
-}
-
-function istty() {
-    tty 1>/dev/null 2>&1
-}
-
 function pad() {
     for (( i = 0; i < ${2:-0}; i++ )) ; do printf "${1:- }" ; done
 }

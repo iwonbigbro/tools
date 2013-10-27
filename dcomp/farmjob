@@ -1,0 +1,178 @@
+#!/bin/bash
+
+declare rprog=$(readlink -f $0 || echo $0)
+declare prog=${rprog##*/}
+declare progdir=${rprog%/*}
+declare crondir=${CRON_PATH:-$HOME/cron}
+
+declare host=
+declare job=
+declare delay=
+declare delay_date=
+declare delay_secs=
+
+set -e 
+trap "exit 1" ERR
+
+# Prevent output on stdout - this will be reserved
+# for returning the processfile
+exec 3>&1
+exec 1>/dev/null
+
+function usage() {
+    cat >&2 <<USAGE
+Usage: $prog [options] hostname command [arguments]
+Options:
+    --delay TS     A "date" addition operation.  E.g.
+                   +2hours+30minutes or +5hours.
+
+Arguments:
+    hostname       The host to execute the job on.
+    command        The command to execute as the job.
+
+Summary:
+    Creates a job file in the job directory ready for execution
+    by runjobs. 
+    
+    Example job directory: ${progdir%/bin}/jobs/$(hostname -s)
+USAGE
+}
+
+# Get command line options
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--help)
+        usage
+        exit 1
+        ;;
+    (--depends-complete)
+        depfile="$2"
+        depreq=
+        shift
+        ;;
+    (--depends-fail)
+        depfile="$2"
+        depreq="fail"
+        shift
+        ;;
+    (--depends-ok)
+        depfile="$2"
+        depreq="ok"
+        shift
+        ;;
+    (--delay)
+        delay="$2"
+        delay_date="$(date -d "Jan 1, 1970 00:00:00 +0000 $delay")"
+        delay_secs=$(date -d "$delay_date" +%s)
+        [[ ${delay_secs:-0} -le 0 ]] && {
+            echo Error: Invalid delay value -- $2 >&2
+            exit 1
+        }
+        shift
+        ;;
+    (-*)
+        echo Error: Invalid option -- $1 >&2
+        exit 1
+        ;;
+    (*)
+        if [[ -z "$host" ]] ; then
+            host="$1"
+        elif [[ -z "$job" ]] ; then
+            job="$1"
+
+            # Any remaining arguments are the arguments 
+            # for the job, so stop processing them.
+            shift
+            break
+        fi
+        ;;
+    esac
+    shift
+done
+
+if [[ -z "$host" ]]; then
+    echo Error: No host specified >&2
+    exit 1
+fi
+
+if [[ -z "$job" ]]; then
+    echo Error: No job specified >&2
+    exit 1
+fi
+
+# Create job
+declare jobsdir=$progdir/../jobs
+declare jobdir=$jobsdir/$host
+mkdir -p $jobdir
+declare tmpfile=$(mktemp $jobdir/tmp.XXXXXX)
+declare jobfile=${tmpfile/\/tmp./\/job.}
+declare procfile=${tmpfile/\/tmp./\/proc.}
+declare okfile=${tmpfile/\/tmp./\/ok.}
+declare failfile=${tmpfile/\/tmp./\/fail.}
+declare jobid=${jobfile##*/job.}
+declare args=
+
+if [[ $# -gt 0 ]] ; then
+    args=$(printf '"%s" ' "$@")
+    args=${args%% }
+fi
+
+chmod 755 $tmpfile
+
+# Create job file 
+cat >$tmpfile <<JOBFILE
+#!/bin/bash
+#
+# Job ID:  $jobid
+# Date:    $(date)
+# Depends: $depfile
+# Delay:   $delay_date
+
+declare rprog=\$(readlink -m \$0)
+declare prog=\${rprog##*/}
+declare progdir=\${rprog%/*}
+declare jobid=$jobid
+declare jobfile=$jobfile
+
+. $HOME/.bash_env
+. $HOME/.bash_paths
+. $HOME/.bash_functions
+
+function finish() {
+    if [[ \$exitstatus -ne 0 ]] ; then
+        warn "Farmed job failed: $jobid [$job $@]"
+        mv $procfile $failfile
+    else
+        mv $procfile $okfile
+    fi
+}
+
+set -e 
+trap "_exit 1" ERR TERM INT
+trap "finish" EXIT
+
+mv $jobfile $procfile
+
+# Ensure we wait for a given dependancy
+[[ -n "$depfile" ]] && {
+    [[ "${depfile/\/proc.//}" == "$depfile" ]] && {
+        die "Farmed job cannot depend on a completed job [$depfile]"
+    }
+    while [[ -f "$depfile" ]] ; do
+        sleep 60
+    done
+    [[ -n "$depreq" && ! -f "${depfile/\/proc.//$depreq.}" ]] && {
+        die "Farmed dependancy requirement not met $depfile [required $depreq]"
+    }
+}
+
+# Ensure we wait for any given delay
+sleep ${delay_secs:-0}
+
+eval '$job $args'
+_exit \$? 
+JOBFILE
+
+echo $procfile >&3
+mv $tmpfile $jobfile
+exit 0

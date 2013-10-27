@@ -1,0 +1,52 @@
+#!/bin/sh
+#
+# Moniors the syslog for RTL 8192c driver mishaps and bounces the interfaces
+# that are using the driver in order to reset the issue.
+
+[ -n "$DEBUG" ] || exec 1>/dev/null 2>&1 </dev/null
+
+prog=`basename $0`
+progdir=`dirname $0`
+statedir=/var/lib/$prog
+log=/var/log/syslog
+logsize=`wc -l < $log`
+lastsize=0
+
+log() { logger -t $prog "$@"; }
+
+[ -d $statedir ] || mkdir $statedir
+[ -s $statedir/logsize ] && lastsize=`cat $statedir/logsize`
+
+echo $logsize >$statedir/logsize
+
+state=$statedir/state
+
+failn=0
+lastn=0
+currn=`awk 'BEGIN { n=0 } /kernel:.* rtl8192c_sreset_xmit_status_check tx hang/ { n++ } END { print n }' $log`
+
+[ $logsize -lt $lastsize ] && rm -f $is $is.fail
+[ -s $state ] && lastn=`cat $state`
+[ -s $state.fail ] && failn=`cat $state.fail`
+[ $currn -gt $lastn ] && failn=`expr $failn + $currn - $lastn`
+
+if [ $failn -gt 10 ] ; then
+    log "Too many failures, stopping interfaces"
+    devs=`iwconfig 2>/dev/null | awk '/^wlan/ { print $1 }'`
+    for i in $devs ; do
+        log "$i: Stopping"
+        ifdown $i
+    done
+
+    log "Waiting for devices to settle"
+    sleep 5
+
+    for i in $devs ; do
+        log "$i: Starting"
+        ifup $i || log "Failed to bring up interface: $i"
+    done
+    failn=0
+fi
+
+echo $failn >$state.fail
+echo $currn >$state

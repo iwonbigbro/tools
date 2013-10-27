@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# Monitors the hostapd log entries.  When the interface or hostapd 
+# malfunctions, it creates lots of deauthenticated log entries.  We
+# can monitor these and restart the appropriate interface when it
+# goes wrong.
+
+[ -n "$DEBUG" ] || exec 1>/dev/null 2>&1 </dev/null
+
+prog=`basename $0`
+progdir=`dirname $0`
+statedir=/var/lib/$prog
+log=/var/log/daemon.log
+logsize=`wc -l < $log`
+lastsize=0
+
+log() { logger -t $prog "$@"; }
+
+[ -d $statedir ] || mkdir $statedir
+[ -s $statedir/logsize ] && lastsize=`cat $statedir/logsize`
+
+echo $logsize >$statedir/logsize
+
+ifaces="`awk '/hostapd: [^:]+: STA/ { gsub(/^.*hostapd: /, ""); gsub(/:.*$/, ""); print }' $log | sort -u`"
+
+for i in $ifaces ; do
+    is=$statedir/$i
+    failn=0
+    lastn=0
+    currn=`awk 'BEGIN { n=0 } /hostapd: '$i': STA .*deauthenticated due to local deauth request/ { n++ } END { print n }' $log`
+
+    [ $logsize -lt $lastsize ] && rm -f $is $is.fail
+    [ -s $is ] && lastn=`cat $is`
+    [ -s $is.fail ] && failn=`cat $is.fail`
+    [ $currn -gt $lastn ] && failn=`expr $failn + $currn - $lastn`
+
+    if [ $failn -gt 10 ] ; then
+        log "$i: Too many failures, stopping interface"
+        ifdown $i
+        log "$i: Waiting for devices to settle"
+        sleep 5
+        log "$i: Starting interface"
+        ifup $i || log "Failed to bring up interface: $i"
+        failn=0
+    fi
+
+    echo $failn >$is.fail
+    echo $currn >$is
+done

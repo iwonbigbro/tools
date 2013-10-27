@@ -1,0 +1,53 @@
+#!/bin/bash
+
+declare rprog=$(readlink -m $0)
+declare prog=${rprog##*/}
+declare progdir=${rprog%/*}
+declare logdir=$progdir/../logs
+declare logs="$logdir/*.log"
+declare rotlog=
+declare size=
+declare file=
+
+for file in $logs ; do
+    [[ ! -f $file ]] && continue
+
+    rotlog="$file.$(date +%Y%m%d)"
+
+    if [[ -f $rotlog || -f $rotlog.gz ]] ; then
+        rotlog="${rotlog}$(date +%H%M%S)"
+    fi
+
+    [[ $(stat -c %s $file) -le 0 ]] && continue
+
+    cat >>$rotlog <<LOG
+********************** CRON LOG **********************
+*
+* Date:           $(date)
+* Filename:       $file
+* Archive:        $rotlog.gz
+*
+LOG
+    cat $file >>$rotlog
+    cat >>$rotlog <<LOG
+*
+******************* END OF CRON LOG ******************
+
+
+LOG
+
+    if [[ -f $rotlog ]] ; then
+        # uncomment to have log sent by mail
+        # cat $rotlog
+        gzip $rotlog
+        rm -f $file
+    else
+        echo "File not found: $rotlog"
+        exit 1
+    fi
+done
+
+# clearout old logs
+find $logdir -type f -mtime +60 -exec rm -f {} \;
+
+exit 0

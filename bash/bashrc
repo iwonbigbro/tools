@@ -1,0 +1,98 @@
+# .bashrc
+
+
+#exec 2> >(tee /tmp/stderr)
+#set -x
+#echo PATH=$PATH
+
+#exec 3>&2
+exec 3>/dev/null
+
+echo >&3 $(date) Executing bashrc
+
+export TOOLSDIR="/home/tools"
+declare -a includes=()
+
+if [[ -t 0 ]] ; then
+    includes=( \
+        /etc/bashrc \
+        /etc/bash.bashrc \
+        $TOOLSDIR/bash/env \
+        $TOOLSDIR/bash/aliases \
+        $TOOLSDIR/bash/paths \
+        $TOOLSDIR/bash/functions \
+    )
+else
+    includes=( \
+        $TOOLSDIR/bash/env \
+        $TOOLSDIR/bash/paths \
+        $TOOLSDIR/bash/functions \
+    )
+fi
+echo >&3 $(date) Loading includes
+for include in "${includes[@]}" ; do
+    [[ -r $include ]] && . $include
+done
+echo >&3 $(date) Done loading includes
+unset include
+unset includes
+
+if [[ -t 0 ]] ; then
+    echo >&3 $(date) Loading completion
+    completioncmd='[[ -r /etc/bash_completion ]] && . /etc/bash_completion'
+    case $HOSTNAME in
+    (buffalo)
+        # Loading completion takes time, provide a loader instead
+        alias loadcompletion="$completioncmd"
+        ;;
+    (*)
+        eval $completioncmd
+        ;;
+    esac
+    echo >&3 $(date) Done loading completion
+
+    if [[ -n "$DISPLAY" && -f $HOME/.Xdefaults ]] && which xrdb 1>/dev/null 2>&1 ; then
+        echo >&3 $(date) Merging Xdefaults with xrdb
+        xrdb -merge $HOME/.Xdefaults
+    fi
+
+    if [[ -r $TOOLSDIR && -x $TOOLSDIR ]]; then
+        export MYUSR=$HOME/usr
+
+        [[ $PWD = $HOME && -f $MYCHDIRCWD ]] && CHDIR="$(cat $MYCHDIRCWD)"
+        [[ ! -d "$CHDIR" ]] && unset CHDIR
+
+        mychdir "${CHDIR:-${PWD}}" 1>&3
+
+        # screen me up scotty
+        if [[ ${SCREEN_SESSION_ENABLED:-0} -eq 1 ]]; then
+            echo >&3 $(date) Reattaching screen session
+            reattach_screen_session
+        fi
+
+        if [[ "$TERM" = "xterm" ]]; then
+            export PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND;} myprompt_command"
+        fi
+
+        if [[ $UID -ne 0 ]]; then
+            export NETBOOT_SERVER=macaroni
+            export NETBOOT=$HOME/netboot
+            export CVSROOT=":pserver:${LOGNAME}@aylcvs1:/cvs/WebShield"
+            # export WINDOW_MANAGER="metacity"
+            
+            if which ssh 1>&3 2>&3 ; then
+                echo >&3 $(date) Attaching to SSH agent
+                ssh_attach
+                if ! ssh-add -L 1>&3 2>&3 ; then
+                    echo >&3 $(date) Adding SSH identity
+                    ssh-add
+                fi
+            fi
+        fi
+    fi
+fi
+
+echo >&3 $(date) Finished executing bashrc
+exec 3>&-
+
+# http://www.ukuug.org/events/linux2003/papers/bash_tips/

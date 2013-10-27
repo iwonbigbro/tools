@@ -1,0 +1,29 @@
+#!/bin/bash
+
+if [[ "115ec1ca023007708ceb7a280fb38d2c" != "$BASH_ALIASES_MD5" ]] ; then
+#tty >/dev/null && export BASH_ALIASES_MD5="115ec1ca023007708ceb7a280fb38d2c"
+
+alias fist='fc -l -1000 | grep'
+alias hist='fc -l'
+alias pcmd='fc -e -'
+#alias wps='ps -ww -o user,pid,ppid,%cpu,%mem,stat,stime,tty,time,command'
+#alias fps='wps -ea | head -1; wps -ea | grep -v $$ | grep'
+alias pg='less'
+alias vi='vim'
+alias cal='echo Today: $(date +"%A %e %B %Y"); echo; cal -3'
+alias lo='logout'
+alias super='$HOME/progs/super/super'
+alias version='test -f /.build && grep product.tag /.build'
+alias aptfind='apt-cache search'
+alias aptitude='sudo /usr/bin/aptitude'
+alias mozcvs='cvs -d :pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'
+alias cd='mychdir'
+alias cp='cp -v'
+alias qtime='mplayer -ao esd -autosync 30'
+
+# Conditional aliases
+if ls --color=tty $HOME 1>/dev/null 2>&1 ; then
+    alias ls='ls --color=tty'
+fi
+
+fi

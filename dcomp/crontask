@@ -1,0 +1,127 @@
+#!/bin/sh
+
+rprog=`readlink -f $0 || echo $0`
+prog=${rprog##*/}
+progdir=${rprog%/*}
+crondir=$HOME/cron
+task=$crondir/tasks/$1
+taskfail=$crondir/tasks/.$1.failures
+basetask=${task##*/}
+log=$crondir/logs/$basetask.log
+sdate="`date`"
+nospacefile=/tmp/$prog.nospace
+warnspacefile=/tmp/$prog.warnspace
+maxbytes=98304
+
+[ -z "$1" ] && {
+    echo $prog: No task specified >&2
+    exit 1
+}
+
+tmpfile=`mktemp /tmp/crontask.XXXXXX`
+
+trap "rm -f $tmpfile" EXIT
+
+# Disk space checks
+dc100="`df -l 2>/dev/null | grep -q '^\/dev.*100%'`"
+[ -n "$dc100" ] && {
+    [ ! -f $nospacefile ] && {
+        echo $prog: No space left on device >&2
+        df -lh 2>/dev/null | grep ^\/dev >&2
+        touch $nospacefile
+    }
+    exit 1
+}
+dc90="`df -l 2>/dev/null | grep -q '^\/dev.*9.%'`"
+if [ -n "$dc90" ] ; then
+    [ ! -f $warnspacefile ] && {
+        echo $prog: Device low on disk space >&2
+        df -lh 2>/dev/null | grep ^\/dev >&2
+        touch $warnspacefile
+    }
+else
+    rm -f $warnspacefile
+fi
+rm -f $nospacefile
+
+[ -z "$task" ] && {
+    echo $prog: No task specified >&2
+    exit 1
+}
+
+if [ -d $task ] ; then
+    if [ $basetask == "run-once" ] ; then
+        # Run-Once tasks are removed immediately
+        ret=0
+        for f in $task/*-cron ; do
+            [ -f $f -a -x $f ] || continue
+
+            mv $f $f.proc
+            eval $f.proc 1>$tmpfile 2>&1
+            [ $? -ne 0 ] && ret=$?
+        done
+    else
+        /bin/run-parts --regex '-cron$' --report $task 1>$tmpfile 2>&1
+        ret=$?
+    fi
+elif [ -x $task ]; then
+    eval $task 1>$tmpfile 2>&1
+    ret=$?
+else
+    echo $prog: No such task -- $task >&2
+    exit 1
+fi
+
+# Hack for frequent operations
+case $1 in
+(run-once) frequent=1 ;;
+(minutely) frequent=1 ;;
+(fiveminutely) frequent=1 ;;
+(tenminutely) frequent=1 ;;
+(quarterhourly) frequent=1 ;;
+(*) frequent=0 ;;
+esac
+[ -s $tmpfile -a $frequent -eq 1 ] && ret=1
+
+if [ ${ret:-0} -ne 0 ] ; then
+    taskfail_ts=`date -r $taskfail +%s`
+    timeout_ts=`date +%s`
+    timeout=`expr $timeout_ts - 3600`
+    
+    [ -f $taskfail -a $taskfail_ts -gt $timeout ] && {
+        # Exit successfully so we don't pollute the email
+        # system with more than one email every half an hour
+        exit 0 
+    }
+    touch $taskfail
+else
+    [ -f $taskfail ] && rm -f $taskfail
+fi
+
+if [ -s $tmpfile ] ; then
+    cat >>$log <<HERE
+
+========================= Start of cron task $basetask $sdate =========================
+
+`cat $tmpfile`
+
+========================== End of cron task $basetask `date` ==========================
+
+
+HERE
+
+    if [ `stat -c %s $tmpfile` -gt $maxbytes ] ; then
+        head -c $maxbytes $tmpfile
+        cat <<HERE
+...
+
+Log contents truncated due to size, appended to: 
+
+    $log
+HERE
+    else
+        cat $tmpfile
+    fi
+fi
+
+exit 0

@@ -1,0 +1,128 @@
+#!/bin/bash
+
+declare rprog=$(readlink -m $0)
+declare prog=${rprog##*/}
+declare progdir=${rprog%/*}
+declare host=$(hostname -s)
+declare jobdir=$progdir/../jobs/$host
+declare job=
+declare log=
+declare sdate=
+declare maxbytes=98304
+declare do_notify=0
+
+function usage() {
+    cat <<USAGE
+Usage: $prog
+Options:
+    -n --notify        Send an email notification on completion
+                       containing the output of the job.  If there
+                       is no output, no notification will be sent.
+
+Summary:
+    Not to be run from the command line under normal conditions;
+    runjobs will process job files present in the job directory,
+    until there are no jobs left to process.  Jobs are processed
+    sequentially unless another runjobs process picks up the next
+    job on the next cron wave.
+
+    Job directory:     $jobdir
+        All jobs are created and executed within this directory.
+
+    Job instance file: tmp.XXXXXX 
+        Initially created while the job is being created.  Once
+        job creation is complete, the file will have execution
+        permissions and be renamed (runjobs ignores these files,
+        see Job file).
+
+    Job file:          job.XXXXXX 
+        A job that is in limbo but that runjobs is interested in.  
+        Its ready to be executed but has not been picked up yet.
+        Once the job is executed, it will rename itself (see Job
+        active file).
+
+    Job active file:   proc.XXXXXX
+        A job file that is currently in a state of execution.
+        Once execution has finished, the file will be removed
+        (runjobs ignores these files).
+USAGE
+}
+
+. $HOME/.bash_env
+
+[[ -n $CRONDEBUG ]] && {
+    set -x
+}
+
+# Get command line options
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--notify|-n)
+        do_notify=1
+        ;;
+    (--help)
+        usage
+        exit 1
+        ;;
+    (-*)
+        echo Invalid option -- $1 >&2
+        exit 1
+        ;;
+    (*)
+        break
+        ;;
+    esac
+    shift
+done
+
+if [[ -d $jobdir ]] ; then
+    for job in $jobdir/job.?????? ; do
+        if [[ ! -f $job ]] ; then
+            continue
+        elif [[ ! -x $job ]] ; then
+            echo Warning: job exists but is not executable -- $job >&2
+            continue
+        fi
+
+        sdate="$(date)"
+        jobid=${job##*/job.}
+        tmplog=$progdir/../logs/farm-$host-$jobid.tmp 
+        log=${tmplog%.tmp}.log
+
+        ( eval $job 1>$tmplog 2>&1 )
+
+        cat >$log <<HERE
+
+========================= Start of farmed job $job $sdate =========================
+
+$(cat $tmplog)
+
+========================== End of farmed job $job $(date) ==========================
+
+
+HERE
+
+        (
+            . $HOME/.bash_functions
+
+            if [[ $do_notify -eq 1 ]] ; then
+                if [[ $(stat -c %s $tmplog) -gt $maxbytes ]] ; then
+                    mailresult -t "RUNJOBS" -s "COMPLETED" <<HERE
+$(head -c $maxbytes $tmplog)
+...
+
+Log contents truncated due to size, appended to: 
+
+    $log
+HERE
+                elif [[ -s $tmplog ]] ; then
+                    mailresult -t "RUNJOBS" -s "COMPLETED" < $tmplog
+                fi
+            fi
+
+            rm -f $tmplog
+        )
+    done
+fi
+
+exit 0

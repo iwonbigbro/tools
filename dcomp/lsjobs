@@ -1,0 +1,147 @@
+#!/bin/bash -i
+
+shopt -s checkwinsize
+
+declare rprog=$(readlink -f $0 || echo $0)
+declare prog=${rprog##*/}
+declare progdir=${rprog%/*}
+
+declare jobdir=$progdir/../jobs
+declare rundir=$jobdir/running
+declare jobs=$jobdir/*/job.*
+declare job=
+declare dir=
+declare jobstart=
+declare jobhost=
+declare jobstate=
+declare jobtask=
+declare colour=
+declare blinkstate=0
+declare blink=0
+
+# Options
+declare do_watch=0
+declare do_clean=0
+declare do_ignore=0
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (-w|--watch)
+        do_watch=1
+        ;;
+    (-i|--ignore)
+        do_ignore=1
+        ;;
+    (-c|--clear)
+        do_clean=1
+        ;;
+    (--help)
+        cat <<USAGE
+Usage: $prog [options]
+Options:
+    -w --watch     Watch the job queue continuously
+    -i --ignore    Ignore finished jobs
+    -c --clear     Clear up finished jobs
+USAGE
+        exit 1
+        ;;
+    (-*)
+        echo Error: Illegal option -- $1 >&2
+        exit 1
+        ;;
+    (*)
+        echo Error: Illegal argument -- $1 >&2
+        exit 1
+        ;;
+    esac
+    shift
+done
+
+declare tmpfile=$(mktemp /tmp/$prog.XXXXXX)
+
+if [[ $do_watch -eq 1 ]] ; then
+    clear
+    trap "rm -f $tmpfile; clear" EXIT
+else
+    trap "rm -f $tmpfile" EXIT
+fi
+
+while true ; do
+    [[ $do_watch -eq 1 ]] && printf "\033[0;0H"
+    jobtasklen=$(( ${COLUMNS:-128} - 39 ))
+    printf "%16s %8s %12s %-${jobtasklen}s" Started State Host Job
+
+    if [[ $blinkstate -eq 1 ]] ; then
+        blinkstate=0
+    else
+        blinkstate=1
+    fi
+
+    line=2
+    for dir in $jobdir/* ; do
+        for job in $dir/* ; do
+            [[ ! -f $job ]] && break
+
+            job=$(readlink $job || echo $job)
+            jobtask="$(grep ^eval $job)"
+            jobstart=$(stat -c %y $job)
+            jobhost=${job##$jobdir/}
+            blink=0
+
+            if [[ "${job%/proc.*}" != "$job" ]] ; then
+                colour=${_BROWN}
+                jobstate="RUNNING"
+                blink=1
+            elif [[ "${job%/job.*}" != "$job" ]] ; then
+                colour=${_BLUE}
+                jobstate="PENDING"
+                blink=1
+            elif [[ "${job%/ok.*}" != "$job" ]] ; then
+                [[ $do_clean -eq 1 ]] && {
+                    rm -f $job 
+                    continue
+                }
+                [[ $do_ignore -eq 1 ]] && continue
+                colour=${_GREEN}
+                jobstate="SUCCESS"
+            elif [[ "${job%/fail.*}" != "$job" ]] ; then
+                [[ $do_clean -eq 1 ]] && {
+                    rm -f $job 
+                    continue
+                }
+                [[ $do_ignore -eq 1 ]] && continue
+                colour=${_RED}
+                jobstate="FAILED"
+            elif [[ "${job%/tmp.*}" != "$job" ]] ; then
+                colour=${_GREY}
+                jobstate="CREATED"
+            else
+                colour=${_GREY}
+                jobstate="UNKNOWN"
+            fi
+
+            if [[ $blink -eq 1 && $blinkstate -eq 0 ]] ; then
+                colour=
+                jobstate=
+            fi
+
+            jobtask=${jobtask#*eval }
+            jobtask=${jobtask//[\'\"]/}
+            jobtask=${jobtask#*eval }
+            jobtask=${jobtask:0:$jobtasklen}
+
+            printf "\n%16s ${colour}%8s${_NORMAL} %12s ${_BLUE}%-${jobtasklen}s${_NORMAL}" "${jobstart%:*}" "$jobstate" "${jobhost%/*}" "$jobtask"
+            (( line++ ))
+        done
+    done > >(sort -r | head -$(( ${LINES:-20} - 2 )))
+    tput ed
+    sleep 1
+
+    do_clean=0
+    [[ $do_watch -eq 1 ]] || break
+
+    [[ $lastline -gt $line ]] && clear
+    lastline=$line
+done
+
+exit 0

@@ -1,0 +1,33 @@
+#!/bin/bash
+
+if [[ "115ec1ca023007708ceb7a280fb38d2c" != "$BASH_PATHS_MD5" ]] ; then
+#tty >/dev/null && export BASH_PATHS_MD5="115ec1ca023007708ceb7a280fb38d2c"
+
+function pathmunge() {
+    local var="${3:-PATH}"
+    if [[ -d "$1" ]]; then
+        # egrep/grep -q does not work on some UNIX systems
+        if ! echo $PATH | /bin/egrep "(^|:)$1($|:)" 1>/dev/null 2>&1 ; then
+            if [[ "$2" = "after" ]]; then
+                eval export $var="\$$var:$1"
+            else
+                eval export $var="$1:\$$var"
+            fi
+        fi
+    fi
+}
+
+pathmunge "$HOME/usr/bin" "before"
+pathmunge "$HOME/bin" "before"
+pathmunge "$TOOLSDIR/bin" "before"
+pathmunge "$TOOLSDIR/scripts" "before"
+
+fi
+
+# low presedence
+#pathmunge "$HOME/src/Tools/Tools/bin" "after"
+#pathmunge "$HOME/cron/bin" "after"
+#pathmunge "$HOME/j2mewtk/2.5.2/bin" "after"
+
+# high presedence
+#pathmunge "/home/BuildGeezer/buildChroot" "before"

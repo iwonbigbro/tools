@@ -1,0 +1,1061 @@
+#!/bin/bash
+
+# Copyright (C) 2008 Craig Phillips.  All rights reserved.
+
+export MYCHDIRCWD=~/.mychdircwd
+export LINES
+export COLUMNS
+
+if [[ ! -x $(which readlink) ]] ; then
+    function readlink() {
+        local link=$(ls -l $1 | awk '{print $NF}')
+
+        if [[ "$link" != "$1" ]] ; then
+            echo $link
+            return 0
+        fi
+
+        return 1
+    }
+fi
+
+function reattach_screen_session() {
+    local screen=$(which screen)
+    [[ ! -x $screen ]] && return 1
+    
+    if ! $screen -ls | grep $(ps -p $$ -o ppid --noheading) 1>&3 2>&3 ; then
+        if ! $screen -R ; then
+            echo Error: Failed to initiate screen session >&2
+        else
+            exit 0
+        fi
+    fi
+    export TERM="xterm"
+    return 0
+}
+
+function mychdir() {
+    local prog="cd"
+    local -a cdargs=()
+    local dir=
+    local pushback=
+    local pushup=
+
+    # ignore command line options
+    while [[ $# -gt 0 ]] ; do
+        case $1 in
+        (-u|--up)
+            pushup=${2//[^0-9]/}
+            shift
+            ;;
+        (-b|--back) 
+            pushback=${2//[^0-9]/}
+            shift
+            ;;
+        (*)
+            if [[ $# -eq 1 ]] ; then
+                dir="$1"
+            else
+                cdargs[${#cdargs[*]}]=$1
+            fi
+            ;;
+        esac
+        shift
+    done
+
+    [[ ${pushback:-0} -gt 0 ]] && dir="-"
+    [[ ${pushup:-0} -gt 0 ]] && dir=".."
+
+    if [[ -z "$dir" ]]; then
+        pushd "$HOME" >/dev/null
+    else
+        case "$dir" in
+        (.) 
+            echo $PWD
+            return 1
+            ;;
+        (..)
+            pushup=${pushup:-1}
+            while [[ $pushup -gt 1 ]] ; do
+                dir="$dir/.."
+                (( pushup-- ))
+            done
+            pushd "$dir" >/dev/null
+            ;;
+        (-) 
+            pushback=${pushback:-1}
+            while [[ $pushback -gt 0 ]] ; do
+                popd >/dev/null
+                (( pushback-- ))
+            done
+            ;;
+        (*)
+            local -a _matches=( "${dir}"* )
+            local -a _dirs=()
+            for d in "${_matches[@]}" ; do
+               [[ -d $d ]] && _dirs[${#_dirs[@]}]="$d"
+            done
+            local count=${#_dirs[*]}
+
+            if [[ ${count:-0} -eq 0 || -d "$dir" ]]; then
+        	pushd "$dir" >/dev/null
+            else
+        	case $count in
+        	(0)
+                    pushd "$dir" >/dev/null
+                    ;;
+                (1)
+        	    pushd "${_dirs[0]}" >/dev/null
+        	    ;;
+        	(*)
+        	    # Multiple dirs found, display a list
+        	    echo "${_RED}Directories availble:${_NORMAL}"
+                    printf "\t${_BLUE}%s${_NORMAL}\n" "${_dirs[@]}"
+        	    return 1
+        	    ;;
+        	esac
+            fi
+            ;;
+        esac
+    fi
+
+    echo "$PWD" >$MYCHDIRCWD
+    mysetprompt
+    return 0
+}
+
+function mysetprompt () {
+    if [[ -z "$_PROMPTCOLOUR" ]] ; then
+        local machine="$(readlink $MACHINESDIR/$HOSTNAME || echo $MACHINESDIR/$HOSTNAME)"
+        local promptcolour=
+
+        # set colour of output
+        if [[ "$LOGNAME" = "root" ]]; then
+            promptcolour=$_RED
+        else
+            case "${machine##*/}" in
+            (build-machine)
+                promptcolour=$_BLUE
+                ;;
+            (home-machine)
+                promptcolour=$_BROWN
+                ;;
+            (telnet-machine)
+                promptcolour=$_BROWN
+                ;;
+            (user-machine)
+                promptcolour=$_CYAN
+                ;;
+            (server-machine)
+                promptcolour=$_GREEN
+                ;;
+            (*)
+                promptcolour=$_PURPLE
+                ;;
+            esac
+        fi
+        export _PROMPTCOLOUR=$promptcolour
+    fi
+
+    local dir="$PWD"
+    [[ "${dir#${HOME}}" != "${dir}" ]] && dir="~${dir#${HOME}}"
+    [[ ${#dir} -gt 35 ]] && dir="${dir:0:10}.../...${dir:$(( ${#dir} - 15 ))}"
+
+    export PS1="\[${_PROMPTCOLOUR}\]\u@\h:${dir}\[${_NORMAL}\] > \[${_NORMAL}\]"
+    export PS2="\[${_PROMPTCOLOUR}\]...\[${_NORMAL}\] > \[${_NORMAL}\]"
+
+    return 0
+}
+
+function myprompt_command() {
+    # Append current history buffer to the history file
+    history -a
+
+    echo -ne "\033]0;$USER@$HOSTNAME:$PWD\007"
+}
+
+function echo_status() {
+    local colour=$failure
+    local retval=1
+
+    case $1 in
+    (FAILED)
+        colour=$_RED
+        ;;
+    (WARNING|PASSED)
+    	colour=$_BROWN
+        ;;
+    (OK)
+        colour=$_GREEN
+        retval=0
+        ;;
+    (*)
+        return 1  
+    esac
+
+    local status_width=7
+    local padding=$(( ( $status_width - ${#1} ) / 2 ))
+    local tabs=$(( ${COLUMNS:-80} / 8 - 2 ))
+
+    printf "\r"
+    for (( i=0 ; i<$tabs ; i++ )); do
+        printf "\t"
+    done
+    printf "[${colour}%${padding}s%s%${padding}s${_NORMAL}]\n" "" $1 "" 
+
+    return $retval
+}
+
+
+################################################################################
+#
+# Function to override standard exit builtin
+#
+# This function sets the exit status to 'exitstatus' before it calls exit.  This
+# allows the exit status to be identified when executing a trap statement on
+# EXIT.
+#
+export exitstatus=1
+
+function _exit() {
+    exitstatus=$1
+    exit $1
+}
+
+function echo_failure() {
+    echo_status "FAILED"
+    return 1
+}
+
+function echo_passed() {
+    echo_status "PASSED"
+    return 1
+}
+
+function echo_warning() {
+    echo_status "WARNING"
+    return 1
+}
+
+function echo_success() {
+    echo_status "OK"
+    return 0
+}
+
+function success() { 
+    echo_success
+    return 0
+}
+
+function passed() { 
+    echo_passed
+    return 1
+}
+
+function warning() { 
+    echo_warning
+    return 1
+}
+
+function failure() { 
+    echo_failure
+    return 1 
+}
+
+function exit_failure() {
+    echo_failure
+    _exit 1 
+}
+
+function exit_success() {
+    echo_success
+    _exit 0
+}
+
+function exit_passed() {
+    echo_passed
+    _exit 1
+}
+
+function exit_warning() {
+    echo_warning
+    _exit 1
+}
+
+################################################################################
+#
+# Functions for shorthand with predefined output
+#
+function warn() {
+    printf "\rError: $*\n" >&2
+}
+
+function die() {
+    warn "$*"
+    _exit 1
+}
+
+function ckdir() {
+    local dir=
+
+    for dir in "$@" ; do
+        if [[ ! -d $dir ]] ; then
+            warn "No such directory -- $dir"
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+function ckfile() {
+    local file=
+
+    for file in "$@" ; do
+        if [[ ! -f $file ]] ; then
+            warn "File not found -- $file"
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+################################################################################
+#
+# Function to change directory silently
+#
+# Returns 0 on success 1 on failure
+#
+function scd() {
+    if ! cd "$*" 1>/dev/null 2>&1 ; then
+        return 1 
+    fi
+    return 0
+}
+
+
+################################################################################
+#
+# Function to print a message in a banner
+#
+# If figlet is not installed then predefined set are looked up, but if they 
+# don't exist then message is just printed in normal form to stdout.
+#
+# Optionally a colour can be specified
+#
+function printb() {
+    local msg="$1" 
+    local colour="$2"
+    local figlet=$(which figlet)
+    local roman="/usr/share/figlet/roman.flf"
+
+    if [[ -n "$colour" ]] ; then
+        echo $(getcolour $colour)
+    fi
+
+    if [[ -x $figlet ]] ; then
+        if [[ -f $roman ]] ; then
+            figlet -ctf roman $msg
+        fi
+    else
+        case "$msg" in
+        (SUCCEEDED) 
+            cat <<'HERE'
+ .oooooo..o ooooo     ooo   .oooooo.     .oooooo.   oooooooooooo oooooooooooo oooooooooo.   oooooooooooo oooooooooo.   
+d8P'    `Y8 `888'     `8'  d8P'  `Y8b   d8P'  `Y8b  `888'     `8 `888'     `8 `888'   `Y8b  `888'     `8 `888'   `Y8b  
+Y88bo.       888       8  888          888           888          888          888      888  888          888      888 
+ `"Y8888o.   888       8  888          888           888oooo8     888oooo8     888      888  888oooo8     888      888 
+     `"Y88b  888       8  888          888           888    "     888    "     888      888  888    "     888      888 
+oo     .d8P  `88.    .8'  `88b    ooo  `88b    ooo   888       o  888       o  888     d88'  888       o  888     d88' 
+8""88888P'     `YbodP'     `Y8bood8P'   `Y8bood8P'  o888ooooood8 o888ooooood8 o888bood8P'   o888ooooood8 o888bood8P'
+HERE
+            ;;
+        (SUCCESS) 
+            cat <<'HERE'
+ .oooooo..o ooooo     ooo   .oooooo.     .oooooo.   oooooooooooo  .oooooo..o  .oooooo..o 
+d8P'    `Y8 `888'     `8'  d8P'  `Y8b   d8P'  `Y8b  `888'     `8 d8P'    `Y8 d8P'    `Y8 
+Y88bo.       888       8  888          888           888         Y88bo.      Y88bo.      
+ `"Y8888o.   888       8  888          888           888oooo8     `"Y8888o.   `"Y8888o.  
+     `"Y88b  888       8  888          888           888    "         `"Y88b      `"Y88b 
+oo     .d8P  `88.    .8'  `88b    ooo  `88b    ooo   888       o oo     .d8P oo     .d8P 
+8""88888P'     `YbodP'     `Y8bood8P'   `Y8bood8P'  o888ooooood8 8""88888P'  8""88888P'
+HERE
+            ;;
+        (OK)
+            cat <<'HERE'
+  .oooooo.   oooo    oooo 
+ d8P'  `Y8b  `888   .8P'  
+888      888  888  d8'    
+888      888  88888[      
+888      888  888`88b.    
+`88b    d88'  888  `88b.  
+ `Y8bood8P'  o888o  o888o
+HERE
+            ;;
+        (PASSED)
+            cat <<'HERE'
+ooooooooo.         .o.        .oooooo..o  .oooooo..o oooooooooooo oooooooooo.   
+`888   `Y88.      .888.      d8P'    `Y8 d8P'    `Y8 `888'     `8 `888'   `Y8b  
+ 888   .d88'     .8"888.     Y88bo.      Y88bo.       888          888      888 
+ 888ooo88P'     .8' `888.     `"Y8888o.   `"Y8888o.   888oooo8     888      888 
+ 888           .88ooo8888.        `"Y88b      `"Y88b  888    "     888      888 
+ 888          .8'     `888.  oo     .d8P oo     .d8P  888       o  888     d88' 
+o888o        o88o     o8888o 8""88888P'  8""88888P'  o888ooooood8 o888bood8P'
+HERE
+            ;;
+        (FAILURE)
+            cat <<'HERE'
+oooooooooooo       .o.       ooooo ooooo        ooooo     ooo ooooooooo.   oooooooooooo 
+`888'     `8      .888.      `888' `888'        `888'     `8' `888   `Y88. `888'     `8 
+ 888             .8"888.      888   888          888       8   888   .d88'  888         
+ 888oooo8       .8' `888.     888   888          888       8   888ooo88P'   888oooo8    
+ 888    "      .88ooo8888.    888   888          888       8   888`88b.     888    "    
+ 888          .8'     `888.   888   888       o  `88.    .8'   888  `88b.   888       o 
+o888o        o88o     o8888o o888o o888ooooood8    `YbodP'    o888o  o888o o888ooooood8
+HERE
+            ;;
+        (FAILED)
+            cat <<'HERE'
+oooooooooooo       .o.       ooooo ooooo        oooooooooooo oooooooooo.   
+`888'     `8      .888.      `888' `888'        `888'     `8 `888'   `Y8b  
+ 888             .8"888.      888   888          888          888      888 
+ 888oooo8       .8' `888.     888   888          888oooo8     888      888 
+ 888    "      .88ooo8888.    888   888          888    "     888      888 
+ 888          .8'     `888.   888   888       o  888       o  888     d88' 
+o888o        o88o     o8888o o888o o888ooooood8 o888ooooood8 o888bood8P'
+HERE
+            ;;
+        (*)
+            echo $msg
+            ;;
+        esac
+    fi
+
+    if [[ -n "$colour" ]] ; then
+        echo $(getcolour normal)
+    fi
+}
+
+
+################################################################################
+#
+# Functions to get user confirmation
+#
+# Returns 0 on confirm 1 on non-confirm.
+#
+# confirm_yes: default is NO user must enter Y or y
+# confirm_no: default is YES user must enter N or n
+#
+function confirm_yes() {
+    local responses="Y y YES YEs Yes yes 1"
+    local confirm=N
+
+    echo -n " [y/N]: "
+    read confirm
+    if [[ "${responses/${confirm:-N}/}" = "${responses}" ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+function confirm_no() {
+    local responses="N n NO No no 0"
+    local confirm=Y
+
+    echo -n " [Y/n]: "
+    read confirm
+    if [[ "${responses/${confirm:-Y}/}" = "${responses}" ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+
+################################################################################
+#
+# Prints the absolute path name of a given path if the path exists, otherwise 
+# prints the given path. 
+#
+# Returns 0 on success 1 on failure.
+#
+function abspath() {
+    local dir="$*"
+    local file=
+    local absdir=
+
+    if [[ -e "$dir" ]]; then
+        if [[ ! -d "$dir" ]]; then
+            file="${dir##*/}"
+            dir="${dir%/*}"
+        fi
+            
+        # Perform in a subshell to retain PWD
+        ( scd "$dir" || _exit 1
+
+        if [[ -n "$file" ]]; then 
+            absdir="$PWD/$file"
+        else
+            absdir="$PWD"
+        fi 
+            
+        # strip double slashes
+        echo ${absdir//\/\//\/}
+
+        _exit 0 ) && return 0
+    fi
+
+    echo "$*"
+    return 1
+}
+
+function ssh_attach() {
+    local rprog=$_
+    local prog=${rprog##*/}
+    local do_detach=0
+    local do_debug=0
+    local stdout="/dev/stdout"
+    local stderr="/dev/stderr"
+
+    unset SSH_AGENT_PID
+    unset SSH_AUTH_SOCK
+
+    local opt=
+    while getopts "xdq" opt "$@" ; do
+        case $opt in
+        (q)
+            stderr="/dev/null"
+            stdout="/dev/null"
+            ;;
+        (x)
+            do_debug=1
+            set -o xtrace
+            ;;
+        (d)
+            do_detach=1
+            ;;
+        (*)
+            cat <<USAGE
+Summary:
+    This is a bash function that attempts to attach the current shell session
+    to an already running ssh-agent instance.  In order to do this, the process
+    must be invoked within the running shell and not as a subshell since it
+    needs to modify the running shell environment.
+
+    If a running agent is not present, one is started and the shell is attached
+    to the new instance of the shh-agent.
+
+Usage: $prog [options]
+
+Options:
+    -d             Detach from running agent and close the agent instance if
+                   this is the last shell to be attached on a host
+    -q             Silent operation
+    -x             Xtrace
+USAGE
+            return 1
+            ;;
+        esac
+    done 
+
+    local agent_pids="$(ps --no-heading -o pid -C ssh-agent 2>/dev/null)"
+    if [[ -z "$agent_pids" ]]; then
+        eval "ssh-agent -s" 1>/dev/null 2>$stderr
+    else
+        local pid=
+        local uid=
+        for pid in $agent_pids; do
+            uid="$(ps --no-heading -o uid -p $pid)"
+
+            if [[ $uid -ne $UID ]]; then
+        	continue
+            fi 
+
+            if [[ $do_detach -eq 1 ]]; then
+        	if [[ $(who | grep $LOGNAME | wc -l) -gt 1 ]]; then
+        	    # other logins still using agent
+        	    break
+        	fi
+        	kill $pid
+        	continue
+            fi
+
+            # awk trims it to remove leading spaces
+            local ppid="$(ps --no-heading -o ppid -p $pid | awk '{print $1}')"
+            ppid_match1=$(($pid - 1))
+            ppid_match2=$(($pid - 2))
+
+            local sockdir=
+            local sockfile=
+            for sockdir in /tmp/ssh-*; do
+        	for sockfile in $sockdir/agent.*; do
+        	    case $sockfile in
+        	    ($sockdir/agent.$pid)
+        		;;
+        	    ($sockdir/agent.$ppid)
+        		;;
+        	    ($sockdir/agent.$ppid_match1)
+        		;;
+        	    ($sockdir/agent.$ppid_match2)
+        		;;
+        	    (*)
+        		continue
+        		;;
+        	    esac
+
+        	    export SSH_AUTH_SOCK=$sockfile
+        	    export SSH_AGENT_PID=$pid
+        	done
+            done
+        done
+
+        # start the agent, its not running
+        if [[ $do_detach -ne 1 && -z "$SSH_AGENT_PID" ]]; then
+            eval "ssh-agent -s" >/dev/null 2>$stderr
+        fi
+    fi
+
+    if [[ $do_debug -eq 1 ]]; then
+        set +o xtrace
+    fi
+    return 0
+}
+
+################################################################################
+#
+# Prints ASCII terminal escape sequence for the given colour (red, yellow, etc).
+#
+# Returns 0 on success 1 on failure.
+#
+function setupcolours() {
+    if [[ ${_COLOURSDEFINED:-0} -ne 1 ]] ; then
+        export _BLACK="[0;30m"
+        export _BLUE="[0;34m"
+        export _GREEN="[0;32m"
+        export _CYAN="[0;36m"
+        export _RED="[0;31m"
+        export _PURPLE="[0;35m"
+        export _BROWN="[0;33m"
+        export _LIGHTGREY="[0;37m"
+        export _DARKGREY="[1;30m"
+        export _LIGHTBLUE="[1;34m"
+        export _LIGHTGREEN="[1;32m"
+        export _LIGHTCYAN="[1;36m"
+        export _LIGHTRED="[1;31m"
+        export _LIGHTPURPLE="[1;35m"
+        export _YELLOW="[1;33m"
+        export _WHITE="[1;37m"
+        export _NORMAL="[0m"
+        export _RESET="$NORMAL"
+
+        # effects
+        export _BRIGHT="[1m"
+        export _DIM="[2m"
+        export _UNDERLINE="[4m"
+        export _BLINK="[5m"
+        export _REVERSE="[7m"
+        export _HIDDEN="[8m"
+
+        export _COLOURSDEFINED=1
+    fi
+}
+
+function getcolour() {
+    if [[ -n "$*" ]]; then
+        eval echo "\$_$(toupper $*)"
+        return 0
+    fi
+
+    return 1
+}
+
+################################################################################
+#
+# Shorthand mount wrapper for remounting file systems as read-write.
+#
+function rwmount() {
+    mount -o remount,rw $*
+}
+
+################################################################################
+#
+# Rotates a given logfile.
+#
+# Returns 0 on success 1 on failure.
+#
+function rotatelog() {
+    local rprog=$_
+    local prog=${rprog##*/}
+    local maxrotate=9
+    local do_compress=0
+    local do_silent=0
+
+    OPTIND=0
+
+    local opt=
+    while getopts "r:xzq" opt "$@" ; do
+        case $opt in
+        (r)
+            maxrotate=$OPTARG
+            ;;
+        (z)
+            do_compress=1
+            ;;
+        (x)
+            set -o xtrace
+            ;;
+        (q)
+            do_silent=1
+            ;;
+        (*)
+            cat <<USAGE
+Usage: $prog [options] file
+
+Options:
+    -r limit       Maximum number of rotations before deletion
+    -z             Compress rotated logs
+    -x             Run with xtrace
+    -q             Be quiet
+USAGE
+            return 1
+            ;;
+        esac
+    done 
+
+    shift $(($OPTIND - 1))
+    local logfiles="$*"
+
+    ( if [[ $do_silent -eq 1 ]]; then
+        exec 1>/dev/null
+        exec 2>/dev/null
+    fi
+
+    if [[ -z "$logfiles" ]]; then
+        die "No file specified"
+    fi
+
+    if [[ -d "$logfiles" ]]; then
+        logfiles="$logfiles/*"
+    fi
+
+    local log=
+    local currentlog=
+    local nextlog=
+    for log in $logfiles ; do
+        if [[ ! -e "$log" ]]; then
+            die "No such file or directory -- $log"
+        elif [[ -d "$log" ]]; then
+            continue
+        fi
+
+        while [[ $maxrotate -gt 0 ]] ; do
+            currentlog=$log.$maxrotate
+
+            if [[ $maxrotate -gt 1 ]]; then
+                nextlog=$log.$(($maxrotate - 1))
+            else
+                nextlog=$log
+            fi
+
+            if [[ -e $nextlog.gz ]]; then
+                mv $nextlog.gz $currentlog.gz 
+            fi
+
+            if [[ -e $nextlog ]]; then
+                mv $nextlog $currentlog
+
+                if [[ $maxrotate -eq 0 ]]; then
+                    touch $nextlog
+                fi
+            fi
+
+            if [[ -e $currentlog ]]; then
+                if [[ $do_compress -eq 1 ]]; then
+                    gzip $currentlog
+                fi
+            fi
+
+            (( maxrotate-- ))
+        done
+    done
+    _exit 0 )
+    return $?
+}
+
+
+################################################################################
+#
+# Sends an automated response 
+#
+function mailresult() {
+    local stat=
+    local tag=
+
+    local opt=
+    while [[ $# -gt 0 ]] ; do
+        case "$1" in
+        (-\?|--help)
+            cat <<USAGE
+Usage: mailresult [options] [recipient]
+Options:
+    -t tag         Tag to attach in subject line (e.g. WS_8_0
+                   or path/to/some/file.log or $(date))
+    -s status      Status to attach in subject line (e.g. FAILED
+                   or SUCCESS or UPDATED).
+
+    recipient      This defaults to \$LOGNAME@\$MAILHOST if not specified.
+USAGE
+           return 1
+           ;;
+        (-t|--tag)
+            if [[ -z "$2" ]] ; then
+                warn "Missing parameter to option -- ${1#-}"
+                return 1
+            fi
+            tag="$2"
+            shift 2
+            ;;
+        (-s|--status)
+            if [[ -z "$2" ]] ; then
+                warn "Missing parameter to option -- ${1#-}"
+                return 1
+            fi
+            stat="$2"
+            shift 2
+            ;;
+        (-*)
+            warn "Illegal option -- ${1#-}"
+            return 1
+            ;;
+        (*)
+            break
+            ;;
+        esac
+    done
+
+    local recipient="${1:-${LOGNAME}${MAILHOST:+@${MAILHOST}}}"
+    local subject="Automated script: ${prog:-$0} ${tag:+$tag }- ${stat:-UNKNOWN}"
+    local mailrc=$(mktemp /tmp/mailresult.XXXXXX)
+
+    cat >$mailrc <<MAILRC
+set append dot
+ignore received message-id resent-message-id status mail-from return-path via delivered-to recipient to cc bcc from
+MAILRC
+
+    # Read from stdin
+    MAILRC=$mailrc mail -n -s "$subject" $recipient
+    rm -f $mailrc
+}
+
+
+################################################################################
+#
+# Prints a given string in lower-case
+#
+function tolower() {
+    local string="$*"
+    local command=
+
+    if [[ -n "$string" && "$string" != "-" ]]; then
+        command="echo $string | "
+    fi
+
+    eval "$command tr '[:upper:]' '[:lower:]'"
+}
+
+################################################################################
+#
+# Prints a given string in upper-case
+#
+function toupper() {
+    local string="$*"
+    local command=
+
+    if [[ -n "$string" && "$string" != "-" ]]; then
+        command="echo $string | "
+    fi
+
+    eval "$command tr '[:lower:]' '[:upper:]'"
+}
+
+################################################################################
+#
+# Command line option handlers for automatic usage generation
+#
+declare -a progopt=()
+declare -a progoptgrp=()
+declare -a progoptuse=()
+declare -a progarg=()
+declare -a progarguse=()
+
+function add_opt() {
+    local opt=$1
+    local arg=
+
+    if [[ -z ${opt##*:*} ]] ; then
+        opt=${1%:*}
+        arg=${1##*:}
+
+        if [[ -z $arg ]] ; then
+            die "Error:  No argument name specified for usage -- $opt"
+        fi
+    fi
+    local group="$2"
+    local desc="$3"
+    local ent=${#progopt[*]}
+
+    progopt[${ent}]="${opt}${arg:+:}"
+    progoptgrp[${ent}]="${group:-Options}"
+    progoptuse[${ent}]="$(printf "%-15s %s" "-${opt} ${arg}" "${desc}")"
+}
+
+function add_arg() {
+    local ent=${#progarg[*]}
+    progarg[${ent}]="$1"
+    progarguse[${ent}]="$2"
+}
+
+function add_usesummary() {
+    local ent=${#progsum[*]}
+    progsum[${ent}]="$1"
+}
+
+function printpara() {
+    local heading="$1"
+    local indent=${2//[^0-9]}
+    local text="$3"
+    local skip="$4"
+    local first=1
+    local len=$(( 80 - $indent ))
+    
+    indent="$(printf "%-${indent}s" " ")"
+
+    [[ -n "$heading" ]] && echo $heading:
+
+    local lastchunk=
+    while [[ -n "$text" ]] ; do
+        local chunk="${text:0:$len}"
+        text="${text:$len}"
+        local nextchunk="${text:0:$len}"
+        [[ -z $skip ]] && printf "$indent"
+        if [[ -z $first && -n $nextchunk ]] ; then
+            if [[ "${chunk}" = "${chunk% }" && "${nextchunk}" = "${nextchunk# }" ]] ; then
+                chunk="$chunk-"
+            fi
+        fi
+        printf "%-${len}s\n" "${chunk# }"
+        skip=
+        first=
+        lastchunk="$chunk"
+    done
+}
+
+function get_optlist() {
+    local optlist="${progopt[*]}"
+    echo "${optlist// }"
+}
+
+function get_optdesc() {
+    local i=
+    local group=
+    local lastgroup=
+
+    for (( i=0; i<${#progopt[*]}; i++ )) ; do
+        group="${progoptgrp[$i]}"
+
+        if [[ "$group" != "$lastgroup" ]] ; then
+            echo
+            echo ${group}:
+        fi
+        lastgroup="$group"
+
+        local use="${progoptuse[$i]}"      
+        local opts="${use:0:16}"
+        local desc="${use:16}"
+
+        printf "    $opts"
+        printpara "" 20 "$desc" 1
+    done
+}
+
+function usage() {
+    printpara "Summary" 4 "${progsum[*]}"
+    echo
+    echo "Usage: $prog [options] ${progarg[*]}"
+    get_optdesc
+}
+
+################################################################################
+#
+# Remove wrapper to ensure files are placed in a waste area for a few days
+# before they are permenently unlinked.  This helps safe guard against
+# accidental deletion.
+#
+function binit() {
+    local prog="${FUNCNAME[0]}"
+    local wastebin="$HOME/wastebin"
+    local ts="$(date +%Y%m%dT%H%M%S)"
+    local waste="$wastebin/$ts"
+    local -a files=()
+
+    # Ensure we have a waste area to put the files
+    local sfx=1
+    while [[ -d $waste ]] ; do
+        waste="$wastebin/$ts.$sfx"
+        (( sfx++ ))
+    done
+    mkdir -p $waste
+
+    [[ $# -gt 0 ]] || {
+        echo $prog: Missing file or directory >&2
+        return 1
+    }
+
+    # Hard link files if possible and move directories
+    for arg in "$@" ; do
+        # Get the path
+        dstdir="$waste/$arg"
+        dstdir="${dstdir%/*}"
+        mkdir -p "$dstdir"
+
+        [[ -d "$arg" ]] && {
+            echo $prog: Binning directory: $arg
+            mv -v "$arg" "$waste/$arg" || return 1
+            continue
+        }
+        [[ -f "$arg" ]] && {
+            echo $prog: Binning file: $arg
+            ln -v "$arg" "$waste/$arg" || mv -v "$arg" "$waste/$arg" || return 1
+            [[ -f "$arg" ]] && rm -f "$arg"
+            continue
+        }
+        [[ -e "$arg" ]] && {
+            echo $prog: Removing special file: $arg
+            rm -vf "$arg" || return 1
+        }
+    done
+
+    return 0
+}
+
+################################################################################
+#
+# Creates a temporary directory for the day
+#
+function setuptmp() {
+    export MYTMP="$HOME/tmp/$(date +%Y_%b_%d_%a)"
+    [[ -d $MYTMP ]] || mkdir -p $MYTMP
+}
+
+################################################################################
+#
+# Changes to a temporary directory and creates it if necessary
+#
+function cdtmp() {
+    [[ -d $MYTMP ]] && cd $MYTMP
+}
+
+setuptmp
+setupcolours

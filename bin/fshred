@@ -1,0 +1,120 @@
+#!/bin/bash
+
+RPROG=$(readlink -m $0)
+PROG=$(basename $RPROG)
+PROGDIR=$(dirname $RPROG)
+
+trap "exit 1" SIGINT SIGTERM
+
+for D in $* ; do
+    echo Processing device -- $D
+    echo
+
+    BASE=${D/\/dev\/?d/}
+    FTMP=/tmp/fshred.$$
+
+    if [[ -e $FTMP ]] ; then
+        echo Error: File or directory already exists -- $FTMP >&2
+	exit 1
+    fi
+
+    if [[ "$BASE" = "$D" || $(echo -n $BASE | wc -c) -gt 1 ]]; then
+        echo Error: Invalid device -- $D >&2
+        exit 1
+    fi
+
+    if cat /proc/mounts | grep -q $D ; then
+        echo Error: Filesystem in use -- $D >&2
+        exit 1
+    fi
+
+    FSCOUNT=$(ls ${D}? 2>/dev/null | wc -l)
+
+    if [[ $FSCOUNT -gt 0 ]] ; then
+        echo $FSCOUNT extended partitions will be removed!
+    else
+        echo Device partition will be removed!
+    fi
+
+    for (( S=5 ; S>0 ; S-- )) ; do
+        printf "\rWarning: Last chance, shredding device in $S seconds..."
+        sleep 1
+    done
+
+    echo
+    echo Removing partitions...
+
+    for (( I=1 ; I<$FSCOUNT ; I++ )); do
+        printf "d\n$I\n"
+    done >$FTMP
+
+    printf "d\nw\n" >>$FTMP
+
+    if ! fdisk $D < $FTMP >/dev/null  2>&1 ; then
+        echo Error: Failed to remove extended partitions >&2
+        exit 1
+    fi
+
+    PART=${D}
+
+    if [[ ! -e $PART ]]; then
+        echo Error: Unable to find partition -- $PART >&2
+	exit 1
+    fi
+
+    echo Creating EXT2 filesystem...
+
+    if ! mke2fs -Fq $PART ; then
+        echo Error: Failed to create EXT2 file system >&2
+        exit 1
+    fi
+
+    rm -f $FTMP
+    mkdir $FTMP
+
+    echo Mounting $PART on /tmp/fshred.$$...
+
+    if ! mount $PART $FTMP ; then
+        echo Error: Failed to mount device -- $PART >&2
+        exit 1
+    fi
+    
+    BCOUNT=$(df -B 1048576 $PART | grep ^$PART | awk '{print $4}')
+    OFILE=$FTMP/shred
+
+    if [[ ${BCOUNT:-0} -eq 0 ]] ; then
+        echo Error: Block count not valid for device -- $PART >&2
+	exit 1
+    fi
+
+    while true; do
+        [[ -e $OFILE ]] && printf "\rWritten %s   " "$(df -h $PART | grep $PART | awk '{print $3" of "$2}')"
+	sleep 5
+    done &
+    WPID=$!
+
+    trap "umount -fl $FTMP 2>/dev/null && rm -rf $FTMP 2>/dev/null; kill $WPID 2>/dev/null" EXIT 
+
+    if ! dd bs=1048576 if=/dev/urandom of=$OFILE count=$BCOUNT ; then
+        echo Error: Failed to shred device -- $D >&2
+	exit 1
+    fi
+
+    kill $WPID 2>/dev/null
+    sleep 1
+    echo
+    echo Synching filesystem...
+    sync
+
+    echo Removing temporary files...
+    rm -f $FTMP/shred
+
+    echo Synching filesystem...
+    sync
+
+    umount -fl $PART 1>/dev/null 2>/dev/null && rm -rf $FTMP 1>/dev/null 2>/dev/null
+
+    echo Successfully shredded device -- $D
+done
+
+exit 0

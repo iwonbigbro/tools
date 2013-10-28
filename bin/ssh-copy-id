@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# Shell script to install your identity.pub on a remote machine
+# Takes the remote machine name as an argument.
+# Obviously, the remote machine must accept password authentication,
+# or one of the other keys in your ssh-agent, for this to work.
+
+prog=${0##*/}
+idfile="${HOME}/.ssh/identity.pub"
+port=22
+
+do_localmode=0
+do_getid=1
+
+function usage() {
+    cat <<USAGE
+Usage: $prog [options] hostname
+Options:
+    -l                  Local mode (do not do a remote copy)
+    -i file             Identity file
+    -p port             Port to connect
+    -d                  Debug mode
+USAGE
+}
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (-l)
+        do_localmode=1
+        ;;
+    (-i)
+        do_getid=0      
+	idfile="${2%.pub}.pub"
+        shift
+        ;;
+    (-p)
+        port=${2//[^0-9]/}
+        shift
+	;;
+    (-d)
+        set -x
+        ;;
+    (-*)
+        usage
+        exit 1
+        ;;
+    (*)
+        break
+        ;;
+    esac
+    shift
+done
+
+host=${1:-localhost}
+
+if [[ $do_getid -eq 1 && -n "${SSH_AUTH_SOCK}" ]]; then
+    getid="$getid ssh-add -L"
+fi
+
+if [[ ! -r $idfile ]] ; then
+    for f in ${HOME}/.ssh/id*.pub ; do
+	if [[ -r $f ]] ; then
+	    idfile="$f"
+	    break
+	fi
+    done
+fi
+
+if [[ -z "$(eval $getid)" && -r "${idfile}" ]]; then
+    getid="cat ${idfile}"
+fi
+
+if [[ -z "$(eval $getid)" ]] ; then
+    echo "Error: No identities found" >&2
+    exit 1
+fi
+
+cmd="umask 077; mkdir ~/.ssh ; cat >> ~/.ssh/authorized_keys"
+if [[ $do_localmode -eq 1 ]] ; then
+    { eval "$getid" ; } | (cd ; eval "$cmd")
+else
+    { eval "$getid" ; } | ssh -p $port $host "$cmd" >/dev/null 2>&1
+
+    if [[ $? -ne 0 ]]; then
+        echo Error: Failed to copy SSH keys >&2
+	exit 1
+    fi
+fi
+
+cat <<EOF
+Now try logging into the machine, with "ssh '$1'", and check in:
+
+  .ssh/authorized_keys
+
+to make sure we haven't added extra keys that you weren't expecting.
+EOF

@@ -1,0 +1,70 @@
+#!/bin/bash
+
+function usage() {
+    cat <<USAGE
+Usage: $(basename $0) [options] hostname [...]
+
+Options:
+    --port PORTNUM     The port number associated with 'hostname'
+    hostname           The host to remove. Multiple hosts can be specified.
+
+Summary:
+    Use this script to remove SSH keys from the known hosts 
+    file when the host key has changed.  It does exactly what
+    ssh-keygen -R does, but it ensures that associated IP addresses
+    are also removed to further supress warnings about IP and
+    hostname key mismatches.
+USAGE
+}
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--port)
+        port=$2
+        shift
+        ;;
+    (--help)
+        usage
+        exit 1
+        ;;
+    (--*)
+        echo Error: Invalid option -- $1 >&2
+        exit 1
+        ;;
+    (*)
+        break
+        ;;
+    esac
+    shift
+done
+
+ret=0
+for host in "$@" ; do
+    ipaddr="$(host $host 2>/dev/null | awk '/has address/{print $4}')"
+    if [[ -n $port ]] ; then
+        host="[$host]:$port"
+        ipaddr="[$ipaddr]:$port"
+    fi
+
+    echo -n "Removing $host..."
+    hostkey="$(ssh-keygen -F $host)"
+    if [[ -n "$hostkey" ]] && ssh-keygen -R $host >/dev/null 2>&1 ; then
+        echo "OK"
+    else
+        echo "FAILED"
+        ret=1
+    fi
+
+    if [[ -n "$ipaddr" ]] ; then
+        echo -n "Removing $ipaddr..."
+        ipaddrkey="$(ssh-keygen -F $ipaddr)"
+        if [[ -n "$ipaddrkey" ]] && ssh-keygen -q -R $ipaddr >/dev/null 2>&1 ; then
+            echo "OK"
+        else
+            echo "FAILED"
+            ret=1
+        fi
+    fi
+done
+
+exit $ret

@@ -1,0 +1,287 @@
+#!/bin/bash
+#
+# Sync photos from the import directory to the live photo directory
+
+prog=${0##*/}
+progdir=${0%/*}
+
+cmd="mv"
+setup_importdir=0
+auto_rotate=1
+
+function usage() {
+    cat <<USAGE
+Usage: $prog [options] [IMPORTDIR] [SYNCDIR]
+Options:
+    -c --copy            Copy files from IMPORTDIR to SYNCDIR.
+    -m --move            Move files from IMPORTDIR to SYNCDIR [Default].
+    --no-auto-rotate     Do not automatically rotate images about their
+                         orientation parameters.
+    --setup-import-dir   Setup the IMPORTDIR directory structure to
+                         mirror the directory structure in SYNCDIR.
+    --dry-run            Don't write anything, just go through the motions.
+    -v --verbose         Verbose output
+
+Arguments:
+    IMPORTDIR
+        The directory containing directories and files to be imported into
+        the SYNCDIR following the same directory structure.  Any directories
+        that do not exist in SYNCDIR will be created.
+
+    SYNCDIR
+        Essentially the destination directory for files to be copied/moved to,
+        from the IMPORTDIR.  This directory must exist.
+USAGE
+}
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--dry-run)
+        dry_run=1
+        ;;
+    (-c|--copy)
+        cmd="cp"
+        ;;
+    (-m|--move)
+        cmd="mv"
+        ;;
+    (-v|--verbose)
+        verbose=1
+        ;;
+    (--no-auto-rotate)
+        auto_rotate=0
+        ;;
+    (--setup-import-dir)
+        setup_importdir=1
+        ;;
+    (--help)
+        usage
+        exit 1
+        ;;
+    (-*)
+        echo $prog: Illeagl option -- $1 >&2
+        exit 1
+        ;;
+    (*)
+        break
+    esac
+    shift
+done
+
+exiftool_bin=$(which exiftool 2>/dev/null)
+[[ -x $exiftool_bin ]] || {
+    echo $prog: Required dependency missing: exiftool >&2
+    exit 1
+}
+
+importdir="${1:-/home/share/import}"
+syncdir="${2:-/home/share/data/photos}"
+
+export PATH=$PATH:$progdir
+
+function verbose() {
+    [[ -n $verbose ]] && {
+        echo "$@"
+    }
+}
+
+function dryrunit() {
+    [[ -n $dry_run ]] && {
+        echo DRYRUN: ${FUNCNAME[1]} "$@"
+        return 0
+    }
+    local cmd=$(which ${FUNCNAME[1]})
+    [[ -z $cmd ]] && {
+        echo "$prog: Command '${FUNCNAME[1]}' not found, on line: ${BASH_LINENO[1]}" >&2
+        exit 1
+    }
+    $cmd "$@"
+}
+
+function mkdir() { dryrunit "$@"; }
+function rmdir() { dryrunit "$@"; }
+function chmod() { dryrunit "$@"; }
+function chown() { dryrunit "$@"; }
+function rm() { dryrunit "$@"; }
+function cp() { dryrunit "$@"; }
+function mv() { dryrunit "$@"; }
+function ln() { dryrunit "$@"; }
+function convert() { dryrunit "$@"; }
+function exiftool() {
+    echo "$prog: Command 'exiftool' called, on line: ${BASH_LINENO[0]}" >&2
+    echo "$prog: Use only 'exifread' or 'exifwrite'" >&2
+    exit 1
+}
+function exifwrite() { 
+    [[ -n $dry_run ]] && {
+        echo DRYRUN: exiftool "$@"
+        return 0
+    }
+    $exiftool_bin "$@"
+}
+function exifread() { 
+    $exiftool_bin "$@"
+}
+
+function setup_importdir() {
+    while read dir ; do
+        [[ ! -d "$importdir/$dir" ]] && mkdir -vp "$importdir/$dir"
+    done < <(cd "$syncdir"; find . -type d)
+    chmod -R 775 $importdir
+}
+
+function sync_files() {
+    local ret=0
+    while read file ; do
+        (( ret++ ))
+        filedir="${file%/*}"
+        filedir="${filedir#./}"
+        filename="${file##*/}"
+	src="$importdir/$filedir/$filename"
+        src="${src//\/.\///}"
+        [[ ! -f $src ]] && {
+            echo $prog: File not found -- $src >&2
+            continue
+        }
+        filename="$(cd "${src%/*}" && exifname -t "${src##*/}")"
+        [[ $? -ne 0 || -z $filename ]] && filename="${src##*/}"
+        target="$syncdir/${filedir// /-}/${filename// /-}"
+        target="${target//\/.\///}"
+	[[ ! -d "${target%/*}" ]] && mkdir -vp "${target%/*}"
+        sync_file "$src" "$target" || continue
+        (( ret-- ))
+    done < <(cd "$importdir"; find . -type f)
+    return $ret
+}
+
+function sync_file() {
+    local src="$1"
+    local dst="$2"
+    local sfcmd="$cmd"
+
+    [[ -z $src ]] && {
+        echo $prog: Missing source file >&2
+        return 1
+    }
+    [[ -z $dst ]] && {
+        echo $prog: Missing target file >&2
+        return 1
+    }
+    [[ -f "$src" ]] || {
+        echo $prog: Source file not found -- $src >&2
+        return 1
+    }
+    [[ -f "$dst" ]] && {
+        local tmd5=$(md5sum -b "$dst" | awk '{print $1}')
+        local smd5=$(md5sum -b "$src" | awk '{print $1}')
+        [[ $tmd5 == $smd5 ]] && {
+            echo $prog: Target file already exists and is the same file -- $dst >&2
+            return 1
+        }
+        dst="$(mktemp -u --suffix=".${dst##*.}" "${dst%.*}_XXXX")"
+    }
+    [[ -f "$dst" ]] && {
+        echo $prog: Target file already exists -- $dst >&2
+        return 1
+    }
+
+    angle=1
+    [[ $auto_rotate -eq 1 ]] && {
+        verbose "Checking orientation of image -- $src"
+        angle=$(exifread -Orientation -n "$src" | awk '{print $NF}')
+        verbose "Orientation of image: $angle"
+        case ${angle:-1} in
+        (1)
+            # Normal, no rotation necessary
+            unset angle
+            ;;
+        (2)
+            sfcmd="flop"
+            unset angle
+            ;;
+        (3)
+            sfcmd="rot"
+            angle=180
+            ;;
+        (4)
+            sfcmd="flip"
+            unset angle
+            ;;
+        (5)
+            sfcmd="flip"
+            angle=90
+            ;;
+        (6)
+            sfcmd="rot"
+            angle=90
+            ;;
+        (7)
+            sfcmd="flop"
+            angle=90
+            ;;
+        (8)
+            sfcmd="rot"
+            angle=270
+            ;;
+        (*)
+            echo "$prog: Unrecognised orientation ($angle), cannot auto rotate -- $src" >&2
+            unset angle
+            ;;
+        esac
+        verbose "Auto rotation correction: $sfcmd($angle)"
+    }
+
+    case $sfcmd in
+    (mv)
+        mv -nv "$src" "$dst" || return 1
+        ;;
+    (cp)
+        cp -npv "$src" "$dst" || return 1
+        ;;
+    (rot|flip|flop)
+        if [[ "rot" = $sfcmd ]] ; then
+            echo $prog: Auto rotating image by $angle degrees -- $src
+            convert "$src" -verbose -quality 99 -rotate $angle "$dst" || return 1
+        else
+            echo $prog: Auto ${sfcmd}ping and rotating image by $angle degrees -- $src
+            if [[ -n $angle ]] ; then
+                convert "$src" -verbose -quality 99 -rotate $angle -$sfcmd "$dst" || return 1
+            else
+                convert "$src" -verbose -quality 99 -$sfcmd "$dst" || return 1
+            fi
+        fi
+        exifwrite -overwrite_original -TagsFromFile "$src" "$dst" || return 1
+        exifwrite -overwrite_original -Orientation=1 -n "$dst" || return 1
+
+        # Cleanup original if default command is to move
+        [[ "mv" = "$cmd" ]] && {
+            srcsz=$(du -sb "$src" | awk '{print $1}')
+            dstsz=$(du -sb "$dst" | awk '{print $1}')
+            [[ $dstsz -lt $srcsz ]] && {
+                cat >&2 <<LOSSY
+$prog: Target file size is more lossy than the source file after conversion:
+           source: $src
+             size: $srcsz
+
+           target: $dst
+             size: $dstsz
+
+${prog//?/ }  Keeping a copy of the source file in: ${dst}_original
+LOSSY
+                dst="${dst}_original"
+                cp -vn "$src" "$dst" || return 1
+            }
+            rm -vf "$src"
+        }
+        ;;
+    (*)
+        echo $prog: Unrecognised command set -- $cmd >&2
+        exit 1
+    esac
+    return 0
+}
+
+[[ $setup_importdir -eq 1 ]] && setup_importdir
+sync_files
+
+exit 0

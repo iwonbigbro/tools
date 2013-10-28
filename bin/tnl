@@ -1,0 +1,216 @@
+#!/bin/bash
+
+declare rprog=$(readlink $0 || echo $0)
+declare prog=${rprog##*/}
+declare progdir=${rprog%/*}
+
+declare file="~/tnl/request"
+declare log="/tmp/tnl.log"
+declare debuglog="/tmp/tnl.debug"
+declare port=22
+declare uname=$USER
+declare cmd="true"
+declare idfile="$HOME/.ssh/id_rsa"
+declare quiet=0
+declare debug=0
+declare do_open=0
+declare do_check=0
+
+function usage() {
+    cat <<USAGE
+Usage: $prog [options] [username@]host
+Options:
+    -f --remote-request-file file  Remote file to check for (default ~/.tnl)
+    -p --port port                 Port to connect on (default 443)
+    -u --user username             Username to connect with (default $USER)
+    -q --quiet                     Quiet output
+    -i --ssh-identity-file file    SSH identity file (default $HOME/.ssh/id_rsa)
+       --debug                     Debugging info
+    -c --check                     Check the state of the tunnel and return.
+
+Summary:
+    The host must be authenticated with RSA/DSA authentication, otherwise 
+    daemonisation will not be possible.  Specify --remote-request-file file to 
+    check for different reuqest file than the default.  If --local-request-file
+    is specified, then no checks are performed on the remote request file, only
+    the local request file is checked.  When the local request file is present
+    the command given by --command is executed.
+USAGE
+}
+
+function err() {
+    [[ $quiet -eq 0 ]] && echo "Error: $*" >&2
+}
+
+function msg() {
+    [[ $quiet -eq 0 ]] && {
+        printf "%s: %s\n" "$(date +"%Y-%m-%d %H:%M:%S")" "$*"
+    }
+}
+
+# If we are running under a tty, output doesn't get redirected
+tty 1>/dev/null 2>/dev/null || {
+    # If the log file exists, redirect to that
+    if [[ -w $log ]] ; then
+        exec 1>>$log
+
+        # If the debug log file exists, redirect stderr to that and enable xtrace
+        if [[ -w $debuglog ]] ; then
+            debug=1
+            exec 2>>$debuglog
+        else
+            exec 2>>$log
+        fi
+    else
+        exec 1>/dev/null
+        exec 2>/dev/null
+    fi
+}
+
+if [[ $debug -eq 1 ]] ; then
+    msg "Execution parameters: $0 $*"
+fi
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (-c|--check)
+        do_check=1
+        ;;
+    (-p|--port)
+        port=${2//[^0-9]/}
+        shift
+        ;;
+    (-u|--user)
+        uname=$2
+        shift
+        ;;
+    (-f|--remote-request-file)
+        file=$2
+        shift
+        ;;
+    (-i|--ssh-identity-file)
+        idfile=$2
+        shift
+        ;;
+    (-q|--quiet)
+        quiet=1
+        ;;
+    (--debug)
+        debug=1
+        ;;
+    (-*)
+        err "Illegal option -- $1"
+        usage
+        exit 1
+        ;;
+    (*)
+        if [[ -z $host ]] ; then
+            host=${1##*@}
+            if [[ $1 != $host ]] ; then
+                uname=${1%@*}
+            fi
+        else
+            usage
+            exit 1
+        fi
+        ;;
+    esac
+    shift
+done
+
+. /home/cphillip/scripts/functions
+
+ssh-attach
+
+[[ $debug -eq 1 ]] && {
+    set -x
+    msg "Debugging mode enabled, redirecting stderr to debug log..."
+}
+
+[[ -z $uname ]] && uname=$USER
+
+config="$HOME/.ssh/config"
+[[ -f $config.tnl ]] && {
+    config="$config.tnl"
+}
+
+[[ -z $host ]] && {
+    err "No host specified"
+    usage
+    exit 1
+}
+
+reopen=0
+pids=( )
+if [[ -f $config.pid ]] ; then
+    pids=( $(cat $config.pid) ) 
+fi
+pids=( "${pids[@]}" $(ps -C ssh -o pid --no-heading) )
+
+# Iterate all ssh processes, looking for the tunnel process
+for pid in "${pids[@]}" ; do
+    # Ensure it is our PID
+    [[ -r /proc/$pid ]] || continue
+
+    # And that it is the one we are looking for
+    cmdline="$(sed 's/\x00/ /g;' /proc/$pid/cmdline 2>/dev/null)"
+    [[ -z $cmdline ]] && continue
+    [[ "$cmdline" = *"ssh -p $port -TnNfg -F $config ${uname:+$uname@}$host"* ]] || {
+        continue
+    }
+
+    # Okay, so it's open, but is it really open? When did we last check?
+    [[ ${do_check:-0} -eq 1 || ! -f $config.chk || $(( $(date +%s) - $(date -r $config.chk +%s) )) -gt 600 ]] && {
+        # Check again! Get the parameters from config...
+        msg "Tunnel process appears to be up, checking tunnel is actually open..."
+
+        params="$(awk -v host=$host 'BEGIN { found=0; }; ($0 == "Host "host) { found=1; } /^RemoteForward.*:22$/ { if (! found) next; print $3; exit; }' $config)"
+        remotehost="${params%:*}"
+        remoteport="${params#*:}"
+        
+        /usr/bin/ssh -o PubkeyAuthentication=yes -o ConnectTimeout=30 -i $idfile -p $port ${uname:+$uname@}$host \
+            "/usr/bin/ssh -o PubkeyAuthentication=yes -o ConnectTimeout=30 -o BatchMode=yes -p $remoteport $remotehost echo"\
+                2>$config.chk
+
+        [[ $(grep -ci -e 'refused' -e 'timed.out' -e 'timeout' $config.chk) -gt 0 ]] && {
+            # Oh dear, connection has gone Kaput! Kill the tunnel and set a flag for
+            # it to be restarted
+            msg "Tunnel is open but appears to be stale, will attempt to restart..."
+            reopen=1
+
+            kill $pid
+            sleep 5
+            kill -0 $pid && {
+                # Die damn it!
+                kill -9 $pid
+            }
+            break
+        }
+
+        # Tunnel is open and working
+        msg "Tunnel state confirmed to be open: ${uname:+$uname@}$host"
+        exit 0
+    }
+
+    # Record discovered pid
+    echo $pid > $config.pid
+    msg "Tunnel is already open: ${uname:+$uname@}$host"
+    exit 0
+done
+
+[[ ${do_check:-0} -eq 1 ]] && exit 1
+
+if [[ $reopen = "1" ]] ; then
+    open=1
+else
+    open=$(/usr/bin/ssh -o PubkeyAuthentication=yes -o ConnectTimeout=30 -i $idfile -p $port ${uname:+$uname@}$host "/bin/sh -c 'test -e $file && echo 1 && rm -f $file || echo 0'")
+    [[ $? -ne 0 ]] && open=0
+fi
+
+[[ $open = "1" ]] && {
+    msg "Opening tunnel: ${uname:+$uname@}$host"
+    /usr/bin/ssh -o PubkeyAuthentication=yes -p $port -TnNfg -F $config ${uname:+$uname@}$host
+    exit $?
+}
+
+exit 1

@@ -1,0 +1,132 @@
+#!/bin/bash
+#
+# Script to check the sync speed of the DSL broadband connection
+
+prog="${0##*/}"
+
+# Action
+task="$1"
+
+lockfile="/var/run/$prog.pid"
+failfile="/tmp/$prog.fail"
+router="192.168.11.254"
+up=0
+down=0
+up_min=256
+down_min=2000
+fail_reset=10
+fail_stop=3
+unset restart
+
+# Redirect output when there is no TTY
+tty 1>/dev/null 2>&1 || {
+    exec 1> >(logger -t "$prog")
+    exec 2>&1
+}
+
+[[ -e $lockfile ]] && {
+    echo >&2 "Already running, PID $(cat $lockfile)"
+    exit 1
+}
+( set -o noclobber ; echo $$ >$lockfile ) || {
+    exit 1
+}
+trap "rm -f $lockfile" EXIT
+
+function get_syncspeed() {
+    read up down < <(GET "http://${router}/cgi/b/dsl/ov/?be=0&l0=1&l1=0" | grep Bandwidth | sed 's/.*>\([0-9,]\+\) \/ \([0-9,]\+\)<.*/\1 \2/g; s/,//g;')
+
+    [[ -n $up && -n $down ]]
+}
+get_syncspeed || {
+    echo >&2 "DSL connection is down"
+    exit 1
+}
+
+[[ $up -lt $up_min ]] && {
+    restart=1
+}
+[[ $down -lt $down_min ]] && {
+    restart=1
+}
+
+case $task in
+(REPORT)
+    echo "REPORT: UP:$up / DOWN:$down"
+    ;;
+esac
+
+if [[ -n $restart ]] ; then
+    echo >&2 "DSL sync speed is inadequate, restart required: Up / Down ($up / $down)"
+    case $task in
+    (RESTART)
+        [ -f $failfile ] && {
+            fail=`cat $failfile`
+        }
+        fail=${fail:-0}
+
+        [ $fail -gt $fail_reset ] && {
+            echo "Resetting resync failures, permitting restart again" >&2
+            fail=0
+        }
+        [ $fail -gt $fail_stop ] && {
+            echo `expr $fail + 1` >$failfile
+
+            [ $fail -gt `expr $fail_stop + 1` ] && {
+                echo "Restart disabled, ignoring request.  Will permit in `expr $fail_reset - $fail` attempts" >&2
+                exit 1
+            }
+            echo "Failed to restart at a better rate on more than three consecutive attempts, aborting restart" >&2
+            exit 1
+        }
+
+        echo "Sending restart request to DSL router: $router..."
+        fields=( \
+            "0=17" \
+            "1=" \
+            "2=Yes" \
+            "3=No" \
+        )
+
+        echo "$(printf "%s&" "${fields[@]}" )EOL=1" | \
+            POST "http://${router}/cgi/b/info/restart/?be=0&l0=0&l1=0&tid=RESTART" \
+            1>/dev/null 2>&1
+
+        # Wait for it to go down
+        echo -n "Stopping..."
+        while ping -t 2 -c 1 $router 1>/dev/null 2>&1 ; do
+            echo -n .
+            sleep 5
+        done
+        echo DONE
+
+        # Wait for it to come back up
+        echo -n "Starting..."
+        while ! ping -t 2 -c 1 $router 1>/dev/null 2>&1 ; do
+            echo -n .
+            sleep 5
+        done
+        echo DONE
+
+        echo -n "Getting new sync speed..."
+        while ! get_syncspeed ; do
+            echo -n .
+            sleep 5
+        done
+        echo
+        echo "DSL sync speed is now: Up / Down ($up / $down)"
+
+        # Is the new sync speed okay?
+        if [ $down -lt $down_min ] ; then
+            echo `expr $fail + 1` >$failfile
+        else
+            echo 0 >$failfile
+        fi
+        ;;
+    esac
+    exit 1
+else
+    [ -f $failfile ] && rm -f >$failfile
+fi
+
+exit 0

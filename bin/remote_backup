@@ -1,0 +1,530 @@
+#!/bin/bash
+#
+# This is the rsync script executed on the backup client and the backup server.
+
+export prog=${0##*/}
+export progdir=${0%/*}
+export proghost=${HOSTNAME}
+
+shopt -s nullglob
+
+function usage() {
+    cat <<USAGE
+Usage: $prog [options]
+Client:
+    The client is the device hosting the data to be backed up to the backup
+    server.  This script is executed on the client in client mode, where it
+    creates a process lock file for the client and initiates the backup as
+    if the backup had been initiated from the server.  This is because the
+    rsync daemon runs on the client, where the server makes it's connection
+    for the transfer of updated and newly added files.
+
+    [CLIENT]---->(script)---->[SERVER]
+
+    The client script can be executed with options that terminate the backup
+    process.  This is useful if the backup overruns it's permitted period,
+    or if too much data has been transferred.
+
+Options:
+    --client-start      Initiates the client process (default).
+
+    --client-stop       Terminates the running client process.
+
+    --luks-key          The key to be used to unlock the luks device.
+
+    --test              Runs rsync with --dry-run option set.
+
+    --debug             Run with bash trace for both server and client 
+                        processes.  Note that this will not propagate to
+                        the server process run with an SSH force command.
+
+Server:
+    The server is the device hosting the remote encrypted backup device.
+    When the client executes this script, the same script is transferred to
+    the server where it is executed in server mode.  When executed in server
+    mode, the server side script initiates the rsync client process via SSH,
+    where it connects to the rsync daemon running on the client.  The rsync
+    process then takes on the responsibility of synchronising the client
+    data directory with the backup directory hosted on the server.
+
+    [CLIENT]<----(rsync)<-----[SERVER]
+
+Options:
+    --server-start      Initiates the server process.
+USAGE
+}
+
+###############################################################################
+#
+# SHARED SCRIPT
+#
+###############################################################################
+
+# General options
+export lock="/var/lock/$prog"
+export config="/etc/$prog/config"
+export mode="client"
+export action="start"
+export testmode=0
+export debug=0
+export locked=0
+
+alias printf='_printf'
+function _printf() {
+    local f="$1"
+    shift
+
+    [[ $f ]] && {
+        f="${prog}[${proghost}]: $f"
+    }
+    \printf "$prog[$proghost]: $f" "$@"
+}
+
+function lock() {
+    # Remove stale lock files first.
+    [[ -f $lock && ! -e /proc/$(cat $lock) ]] && {
+        rm -f $lock
+    }
+    ( set -o noclobber ; echo $$ >$lock ) || {
+        if [[ -f $lock ]] ; then
+            printf >&2 "Locked by another process -- %d\n" $(cat $lock)
+        else
+            printf >&2 "Failed to create lock file -- %s\n" $lock
+        fi
+        exit 1
+    }
+    export locked=1
+}
+
+function unlock() {
+    [[ -e $lock ]] && {
+        rm -f $lock
+    }
+    export locked=0
+}
+
+function load_config() {
+    [[ -f $config ]] && {
+        while read key eq value ; do
+            [[ $key = "#"* ]] && continue
+            [[ $eq != "=" ]] && continue
+
+            export $key="$value"
+        done < $config
+    }
+}
+
+function stop_process() {
+    function _sp_kill() {
+        kill $1 1>/dev/null 2>&1
+    }
+
+    function _sp_check() {
+        kill -0 $1 1>/dev/null 2>&1
+    }
+
+    # Obtain a list of processes that belong to the same process
+    # group for the remote_backup process.
+    local pgid="$(ps --no-heading -p $1 -o pgid)"
+    local pids=( $(ps --no-heading -eao pid,pgid | awk '$2 == "'${pgid//[^0-9]/}'" { print $1 }' | sort -ru) )
+    local ret=0
+    local count=0
+
+    local pid
+    for pid in "${pids[@]}" ; do
+        count=0
+
+        printf "Stopping $pid..."
+        while _sp_check $pid ; do
+            _sp_kill $pid 
+            sleep 1
+            (( count++ ))
+            [[ $count -gt 10 ]] && {
+                echo FAILED
+                printf >&2 "Timed out waiting for process -- %d\n" $pid
+                ret=1
+                break
+            }
+        done
+        [[ $ret -eq 0 ]] && echo OK
+    done
+
+    unset _sp_check _sp_kill
+
+    return $ret
+}
+
+function exit_handler_hook() {
+    return 0
+}
+
+function exit_handler() {
+    exit_handler_hook
+
+    [[ $locked -eq 1 ]] && {
+        unlock
+    }
+}
+
+function signal_handler_hook() {
+    return 0
+}
+
+function signal_handler() {
+    printf >&2 "Signal caught -- %s\n" $1
+
+    signal_handler_hook $1
+
+    case $1 in
+    (INT|TERM)
+        # Reap children and exit
+        local child
+        for child in $(ps --no-heading -o pid --ppid $$) ; do
+            stop_process $child || {
+                printf "Sending SIGKILL to $child...\n"
+                kill -9 $child
+            }
+        done
+        
+        exit 1
+        ;;
+    esac
+}
+
+###############################################################################
+#
+# THE CLIENT SCRIPT
+#
+###############################################################################
+
+function client_start() {
+    export client_files=()
+
+    [[ -f $progdir/ssh-utils ]] && {
+        . $progdir/ssh-utils
+
+        sshattach || {
+            printf >&2 "Failed to attach to SSH authentication agent\n"
+            exit 1
+        }
+    }
+
+    function tunnel_open() {
+        local hook
+        for hook in /etc/$prog/tunnel_open_hooks/* ; do
+            [[ $hook = *"/README" ]] && continue
+            . $hook
+        done
+    }
+
+    function tunnel_close() {
+        local hook
+        for hook in /etc/$prog/tunnel_close_hooks/* ; do
+            [[ $hook = *"/README" ]] && continue
+            . $hook
+        done
+    }
+
+    function exit_handler_hook() {
+        tunnel_close
+        
+        for f in "${client_files[@]}" ; do
+            [[ -f $f ]] && rm -f $f
+        done
+    }
+
+    load_config
+
+    [[ ${server_forcecommand:-0} != 1 ]] && {
+        printf >&2 "Use without SSH forcecommand is now depricated for security reasons\n"
+        exit 1
+    }
+
+    lock
+    tunnel_open
+
+    ssh_opts=( \
+        ${rsync_forward_port:+-R ${rsync_forward_port}:localhost:${rsync_port}} \
+        ${server_identity:+-i ${server_identity}} \
+        ${server_config:+-F ${server_config}} \
+        ${server_port:+-p ${server_port}} \
+        ${server_user:+${server_user}@}${server_host:-localhost} \
+    )
+    ssh_ret=1
+
+    ssh "${ssh_opts[@]}" <<OPTIONS
+$(test -f $config && cat $config)
+
+luks_key = $luks_key
+debug = $debug
+testmode = $testmode
+OPTIONS
+
+    ret=$?
+
+    [[ $ret -eq 0 ]] && return 0
+
+    [[ $ret -ge 128 ]] && {
+        local signum=$(( $ret - 128 ))
+
+        printf >&2 "Server SSH process terminated by signal: %s\n" "$(kill -l $signum)"
+    }
+
+    [[ $ret -ge 64 ]] && {
+        local dc=$(( $ret - 64 ))
+
+        printf >&2 "Received disconnect from server: %s\n" "$dc"
+    }
+
+    case $ret in
+    (2) printf >&2 "Connecting to server failed: %s\n" "$server_host" ;;
+    (*) printf >&2 "Failed to instantiate server side process: %s\n" "$server_host" ;;
+    esac
+
+    printf >&2 "    exitcode: %d\n" "$ret"
+    exit $ret
+}
+
+function client_stop() {
+    [[ ! -e $lock ]] && exit 0
+
+    stop_process $(cat $lock)
+    exit $?
+}
+
+###############################################################################
+#
+# THE SERVER SCRIPT
+#
+###############################################################################
+
+function server_start() {
+    unset server_dir
+
+    export dev_mounted=0
+    export rsync_opts=( \
+        --archive \
+        --update \
+        --verbose \
+        --checksum \
+        --append-verify \
+        --links \
+        --hard-links \
+        --perms \
+        --owner \
+        --group \
+        --backup \
+        --suffix=$(date +.%Y%m%d_%H%M.%S) \
+        --prune-empty-dirs \
+        --timeout=0 \
+        --itemize-changes \
+        --one-file-system \
+        -F \
+    )
+
+    function umount_dev() {
+        [[ -n $server_dev ]] && {
+            printf "Synching disks...\n"
+            sync ; sync ; sync
+
+            printf "Un-mounting backup device $server_dev...\n"
+            umount $server_dev || {
+                printf "Trying again in 10 seconds...\n"
+                sleep 10
+                umount $server_dev
+            }
+            [[ -d $server_dir ]] && rmdir $server_dir
+
+            cryptsetup luksClose $luks_uuid
+        }
+    }
+
+    function mount_dev() {
+        [[ -n $luks_key ]] && {
+            local luks_dev="/dev/disk/by-uuid/$luks_uuid"
+
+            printf "Opening encrypted device $luks_dev...\n"
+            cryptsetup -d <(echo "$luks_key") luksOpen $luks_dev $luks_uuid || {
+                printf >&2 "Failed to access encrypted device: $luks_dev\n"
+                exit 1
+            }
+        }
+        export server_dev="/dev/mapper/$luks_uuid"
+
+        printf "Mounting backup device $server_dev...\n"
+        [[ -b $server_dev ]] || {
+            printf >&2 "Not a block device -- $server_dev\n"
+            exit 1
+        }
+
+        # Create a temporary mount point for the device that will be cleaned up later.
+        export server_dir=$(mktemp -d /tmp/${0##*/}.XXXXXX)
+        mount -t ext3 $server_dev $server_dir || {
+            printf >&2 "Failed to mount device -- $server_dev\n"
+            exit 1
+        }
+        export dev_mounted=1
+    }
+
+    function server_rsync() {
+        [[ $testmode -eq 1 ]] && rsync_opts=( "${rsync_opts[@]/%--dry-run/}" "--dry-run" )
+
+        rsync "${rsync_opts[@]}" \
+            ${rsync_forward_port:+--port=${rsync_forward_port}} \
+            ${rsync_user:+${rsync_user}@}${rsync_host:-localhost}:$rsync_dir \
+            $server_dir
+    }
+
+    function server_sync() {
+        # The rsync connection is always to localhost, since this is the TCP
+        # port forward from the backup client's rsync daemon.
+        printf "Synchronising with $prog client...\n"
+        server_rsync "${rsync_opts[@]}" || {
+            printf >&2 "Synchronisation failed!\n"
+            exit 1
+        }
+        printf "Synchronisation complete!\n"
+    }
+
+    function server_purge() {
+        local epoch_day=$(( 60 * 60 * 24 ))
+        local expire=30
+        local dtime=$(( $(date +%s) - ( $expire * $epoch_day ) ))
+        local ttime=$(( $dtime - $epoch_day ))
+        local rsync_opts=( \
+            "${rsync_opts[@]}" \
+            --dry-run \
+            --delete \
+        )
+
+        printf "Purging non-existent files older than $expire days...\n"
+        while read file ; do
+            absfile="$server_dir/$file"
+            if [[ -e $absfile ]] ; then
+                mtime=$(date -r "$absfile" +%s)
+                if [[ $mtime -lt $ttime ]] ; then
+                    # We will not have encountered this file before
+                    # since it is older than our dtime plus 1 day.
+                    # So flag it for deletion in dtime days.
+                    echo '*marking     '$file
+                    [[ $testmode -ne 1 ]] && {
+                        touch "$absfile"
+                    }
+                elif [[ $mtime -lt $dtime ]] ; then
+                    echo '*deleting    '$file
+                    [[ $testmode -ne 1 ]] && {
+                        if [[ -d "$absfile" ]] ; then
+                            rm -rf "$absfile"
+                        else
+                            rm -f "$absfile"
+                        fi
+                    }
+                else
+                    ltime=$(( $mtime - $dtime )) 
+                    if [[ $ltime -lt 5 ]] ; then
+                        echo '*'$ltime' days TTL '$file
+                    else
+                        true
+                        #echo '*keeping     '$file
+                    fi
+                fi
+            else
+                true
+                #echo '*missing     '$file
+            fi
+        done < <(server_rsync | awk '/^\*deleting/ { gsub(/^\*deleting /, ""); print; }')
+
+        [[ $? -ne 0 ]] && {
+            printf >&2 "Purge failed!\n"
+            exit 1
+        }
+        printf "Purge complete!\n"
+    }
+
+    function exit_handler_hook() {
+        [[ $dev_mounted -eq 1 ]] && umount_dev
+    }
+
+    # Paramaters are read from stdin.
+    unset luks_key
+    unset p v
+    while read -t 10 p e v ; do
+        [[ ! $p || "$p" = "#"* ]] && continue
+        [[ "$e" != "=" ]] && continue
+
+        unset $p
+        eval "export ${p}=\"${v}\""
+    done
+
+    # Enable xtrace if debug flag has been specified.
+    [[ $debug -eq 1 ]] && {
+        set -x
+    }
+
+    lock
+    mount_dev
+    server_sync
+    server_purge
+}
+
+###############################################################################
+#
+# MAIN
+#
+###############################################################################
+
+argv=( "$@" )
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--luks-key)
+        export luks_key="$2"
+        shift
+        ;;
+    (--client-start)
+        mode="client"
+        action="start"
+        ;;
+    (--client-stop)
+        mode="client"
+        action="stop"
+        ;;
+    (--server-start)
+        mode="server"
+        action="start"
+        ;;
+    (--debug)
+        debug=1
+        set -x
+        ;;
+    (--test)
+        testmode=1
+        ;;
+    (--help)
+        usage
+        exit 1
+        ;;
+    (-*)
+        printf >&2 "Illegal option -- %s\n" $1
+        exit 1
+        ;;
+    (*)
+        printf >&2 "Invalid argument -- %s\n" $1
+        exit 1
+        ;;
+    esac
+    shift
+done
+
+trap "signal_handler INT" INT
+trap "signal_handler TERM" TERM
+trap "exit_handler" EXIT
+
+# Server execution is performed as root
+[[ $mode = "server" && $UID -ne 0 ]] && {
+    exec /usr/bin/sudo "$0" "${argv[@]}"
+}
+
+${mode}_${action}
+
+exit 0

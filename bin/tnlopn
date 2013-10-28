@@ -1,0 +1,56 @@
+#!/bin/bash
+
+declare tnlfile="/home/mtunnel/tnl/request$1"
+declare init=0
+declare wait=0
+declare ack=0
+declare open=0
+
+[[ ! -w ${tnlfile%/*} ]] && {
+    echo "Error: Write access is required to ${tnlfile%/*}" >&2
+    exit 1
+}
+[[ -e $tnlfile ]] && {
+    rm -f $tnlfile || {
+        echo "Error: Request exists, access denied: $tnlfile" >&2
+        exit 1
+    }
+}
+
+# Clean up cancelled or incomplete requests.
+trap "rm -f $tnlfile" EXIT
+
+while true ; do
+    read port state service < <(nmap buffalo -p 9122 | grep ^9122)
+    if [[ -z "$state" || "$state" != "open" ]] ; then
+        if [[ $waited -eq 0 ]] ; then
+            waited=1
+        fi
+    else
+        open=1
+        if [[ $waited -eq 0 ]] ; then
+            echo ISOPEN
+        else
+            echo OK
+        fi
+        break
+    fi
+
+    if [[ $init -eq 0 ]] ; then
+        touch $tnlfile || exit 1
+        chmod 666 $tnlfile
+        init=1
+    fi
+
+    if [[ $ack -eq 0 && ! -f $tnlfile ]] ; then
+        ack=1
+    fi
+    sleep 10
+done
+
+if [[ $open -eq 0 ]] ; then
+    echo FAILED
+    exit 1
+fi
+
+exit 0

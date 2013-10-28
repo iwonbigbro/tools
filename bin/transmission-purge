@@ -1,0 +1,78 @@
+#!/bin/sh
+#
+# Purge completed transmission downloads
+
+datadir="/export/home/share/data"
+
+cd /export/home/debian-transmission/downloads
+
+unset stopped_id stopped_name
+dl_count=0
+
+list="`mktemp /tmp/${0##*/}.XXXX`"
+trap "rm -f $list" EXIT
+transmission-remote -l | cut -c -11,57- >$list
+
+# ID     Done       Have  ETA           Up    Down  Ratio  Status       Name
+#    3    27%   217.3 MB  34 min       0.0   286.2   0.00  Downloading  From Paris with Love (2010) R5 DVDRip XviD-MAXSPEED
+while read id prog status name ; do
+    # Skip header and summary lines
+    [ "$id" = "ID" -o "$id" = "Sum:" ] && continue
+
+    # Only interested in completed downloads
+    [ "$prog" != "100%" ] && {
+        # Track those that are currently downloading and 
+        # the first that is not.  We will then resume the
+        # next torrent when there are no torrents 
+        # downloading.
+        [ "$status" = "Stopped" -a -z "$stopped_id" ] && {
+            stopped_id="$id"
+            stopped_name="$name"
+        }
+        [ "$status" = "Downloading" ] && {
+            dl_count=`expr $dl_count + 1`
+        }
+        continue
+    }
+
+    echo "Download complete: $name"
+
+    # It must exist
+    [ -e "$name" ] && {
+        # Get a count of the number of audio and video
+        # files within the torrent download directory.
+        # If the number of audio files exceeds the number
+        # of video files, it is copied to the music folder,
+        # and vise-versa copied to the movies folder.
+        mvname="`echo "$name" | sed 's/[&$\\\/*?]//g; s/\ /./g'`"
+        mvdir="movies/movies"
+        [ -d "$name" ] && {
+            audiofiles=`find "$name" -type f | grep -e '.flac$' -e '.mp3$' -e '.wav$' -e '.aac$' -e '.ogg$' | wc -l`
+            videofiles=`find "$name" -type f | grep -e '.mpg$' -e '.avi$' -e '.mov$' -e '.flv$' -e '.mp4$' | wc -l`
+            [ ${audiofiles:-0} -gt ${videofiles:-0} ] && {
+                mvdir="music"
+            }
+        }
+
+        # Don't replace or move to existing directories
+        mvto="$datadir/$mvdir/$mvname"
+        [ -e "$mvto" ] && {
+            echo "Torrent already exists: $mvto"
+            mvto="`mktemp -u "$mvto.XXXX"`"
+            echo "Generated unique name: $mvname"
+        }
+
+        # Move the data into the movies directory, if
+        # successful then unlink the transmission ID.
+        mv -vn "$name" "$mvto"
+    }
+    [ ! -e "$name" ] && {
+        echo "Removing zombie: $name"
+        transmission-remote -t $id -r
+    }
+done < $list
+
+[ $dl_count -eq 0 -a -n "$stopped_id" ] && {
+    echo "Resuming stopped download: $stopped_name"
+    transmission-remote -t $stopped_id -s
+}

@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# Test script for safely testing iptables-rules
+
+prog=${0##*/}
+dir="/etc/iptables"
+testing="$dir/testing"
+config="$dir/config"
+testcheck="${testing%/*}/.${testing##*/}.check"
+
+function get_config() {
+    [[ -f $config ]] && {
+        local IFS="="
+        while read setting value ; do
+            case $setting in
+            (latest) latest="$value" ;;
+            (testing) testing="$value" ;;
+            esac
+        done < $config
+    }
+}
+get_config
+
+[[ $UID -ne 0 ]] && {
+    echo $prog: Root privelidges required >&2
+    exit 1
+}
+
+[[ -f $testing ]] || {
+    echo File not found -- $testing >&2
+    exit 1
+}
+
+iptables-apply -t ${1:-120} $testing && {
+    touch $testcheck
+    echo -n "Commit new rules? [y/N]: "
+    read -n1 -t ${1:-120} ret 2>&1 || :
+    case "$ret" in
+    (y*|Y*)
+        echo
+        iptables-commit
+        ;;
+    (*)
+        echo 
+        echo You can commit the new rules by running iptables-commit
+        ;;
+    esac
+}

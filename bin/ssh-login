@@ -1,0 +1,7 @@
+#!/bin/sh
+#
+# Logs a login event when it is made through the SSH connection
+
+mail -n -s "${USER:-Unknown} logged in via SSH" root <<NOTIFICATION
+$(date +"%Y-%m-%d %H:%M:%S"): User $USER has just logged into $HOSTNAME via SSH from $SSH_CLIENT
+NOTIFICATION

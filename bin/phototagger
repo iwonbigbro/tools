@@ -1,0 +1,207 @@
+#!/usr/bin/perl
+
+=head1 NAME
+
+phototagger - A really simple photo tagger
+
+=head1 SYNOPSIS
+
+phototagger [options] [[TAGDIR] ...]
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-man>
+
+Display the man page for phototagger.
+
+=item B<-photo-dir> DIR
+
+The path to where the photo library is kept.
+
+=back
+
+=head1 DESCRIPTION
+
+A file tagger that will scan a directory for files to be tagged.  The directory will contain a link to the file of some kind, be it a symbolic link or just a Windows shortcut.  An attempt will be made to obtain a path to the real file from the shortcut.
+
+Tagging works by simply using either the directory name as the tag to be added to the file, or if there is a TAG.txt file present within the directory, tagging rules are read from the file to be executed as tag modifiers on all other files within the same directory, that support EXIF tags.
+
+=cut
+
+use strict;
+use Cwd;
+use Getopt::Long;
+use Pod::Usage;
+
+my $prog = $0;
+
+$SIG{__DIE__} = sub {
+    warn("$prog: Error: " . join(" ", @_) . "\n");
+    exit(1);
+};
+
+my @tagdirs = ( "/home/share/tagger" );
+
+my $opt_usage = 0;
+my $opt_man = 0;
+my $opt_debug = 0;
+my $opt_photodir = "/home/share/data/photos";
+
+GetOptions(
+    "help|?" => \$opt_usage,
+    "man" => \$opt_man,
+    "photo-dir=s" => \$opt_photodir,
+    "debug" => \$opt_debug,
+) or pod2usage(2);
+if ($opt_usage) {
+    pod2usage(1);
+}
+if ($opt_man) {
+    pod2usage(-verbose => 2);
+}
+
+if (scalar(@ARGV) > 0) {
+    @tagdirs = ();
+    push(@tagdirs, @ARGV);
+}
+
+sub debug {
+    if ($opt_debug) {
+        warn("DEBUG: " . join(" ", @_) . "\n");
+    }
+}
+
+debug("Tag dirs = " . join(", ", @tagdirs));
+
+foreach my $tagdir (@tagdirs) {
+    debug("Processing tag dir: $tagdir");
+    if (-d $tagdir) {
+        # Grab a list of the sub directories
+        my @subdirs = ();
+        if (opendir(my $h_dir, $tagdir)) {
+            @subdirs = grep { !/^\./ && -d "$tagdir/$_" } readdir($h_dir);
+            close($h_dir);
+        }
+
+        # Iterate through the sub directories
+        foreach my $subdir (@subdirs) {
+            # Prefix with tag directory
+            $subdir = "$tagdir/$subdir";
+            debug("Processing sub dir: $subdir");
+
+            # Grab a list of the files
+            my @tagfiles = ();
+            if (opendir(my $h_dir, $subdir)) {
+                @tagfiles = grep { !/^TAG\.txt/ && -f "$subdir/$_" } readdir($h_dir);
+                close($h_dir);
+            } else {
+                die("Failed to read directory -- $subdir ($!)");
+            }
+            debug("Tag files: \n\t" . join("\n\t", @tagfiles));
+
+            # Build a list of tag modifiers to be executed
+            my ($tag) = ($subdir =~ /.*\/(.*)$/);
+            my @tags = ( "-UserComment+='$tag'" );
+            if (-f "$subdir/TAG.txt") {
+                debug("Reading tag rule file -- $subdir/TAG.txt");
+                @tags = ();
+                if (open(my $h_tag, "<", "$subdir/TAG.txt")) {
+                    my $lineno = 0;
+                    while(my $tagent = <$h_tag>) {
+                        $lineno++;
+                        if ($tagent =~ m/^#/) {
+                            # Ignore comments
+                            next;
+                        } elsif ($tagent =~ m/^-?(\w+)([+-]?=)(.*)$/) {
+                            push(@tags, "-$1$2'$3'");
+                        } else {
+                            die("Invalid rule, line $lineno: $subdir/TAG.txt");
+                        }
+                    }
+                } else {
+                    die("Failed to open file -- $subdir/TAG.txt");
+                }
+            }
+
+            # Get the real list of files
+            my $unlinkfiles = {};
+            my @realfiles = ();
+            foreach my $tagfile (@tagfiles) {
+                my $realfile;
+                my $tagfile = "$subdir/$tagfile";
+                if (-l $tagfile) {
+                    # Symlink
+                    debug("Reading symlink -- $tagfile");
+                    $realfile = readlink($tagfile);
+                    if (! defined($realfile)) {
+                        warn("Failed to read symlink -- $tagfile");
+                        next;
+                    }
+                    debug("Symlink: $realfile");
+                } elsif ($tagfile =~ m/\.lnk$/) {
+                    # Windows sortcut
+                    debug("Reading shortcut -- $tagfile");
+                    if (open(my $h_lnk, "<", $tagfile)) {
+                        local $/;
+                        my $content = <$h_lnk>;
+                        close($h_lnk);
+
+                        if (defined($content)) {
+                            ($realfile) = ($content =~ /.*photos\\(.*\\\w+\.\w{3}).*/s);
+                            if (! defined($realfile)) {
+                                warn("Failed to read shortcut -- $tagfile");
+                                next;
+                            }
+                            $realfile =~ s/\\/\//g;
+                            $realfile = "$opt_photodir/$realfile";
+                            debug("Shortcut: $realfile");
+                        }
+                    } else {
+                        warn("Failed to open shortcut -- $tagfile");
+                        next;
+                    }
+                } else {
+                    warn("Ignoring unsupported file -- $tagfile\n");
+                    next;
+                }
+                
+                # Looks okay, add it to the list
+                if (-f $realfile) {
+                    push(@realfiles, $realfile);
+                    $unlinkfiles->{$realfile} = $tagfile;
+                }
+            }
+
+            debug("Tag rules: \n\t" . join("\n\t", @tags));
+            debug("Files to tag: \n\t" . join("\n\t", @realfiles));
+
+            # Now tag the files
+            foreach my $file (@realfiles) {
+                my $unlinkfile = $unlinkfiles->{$file};
+                my @args = ( "-overwrite_original", @tags, $file );
+
+                debug("exiftool", @args);
+                debug("unlink", $unlinkfile);
+
+                if (0) {
+                    if (0 == system("exiftool", @args)) {
+                        if (-f $unlinkfile) {
+                            print("Removing file: $unlinkfile\n");
+                            if (! unlink($unlinkfile)) {
+                                warn("Failed to remove file: $unlinkfile");
+                            }
+                        }
+                    } else {
+                        warn("Failed to assign tags to file: $file\n\t", join("\n\t", @tags));
+                    }
+                }
+            }
+        }
+    } else {
+        die("Directory not found -- $tagdir");
+    }
+}
+
+1;

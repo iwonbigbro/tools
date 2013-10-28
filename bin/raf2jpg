@@ -1,0 +1,62 @@
+#!/bin/bash
+
+prog=${0##*/}
+
+function usage() {
+    cat <<USAGE
+Usage: $prog [options] [FILE [...]]
+Options:
+    --help         Display usage summary
+
+Summary:
+    If no FILE[s] are specified, then all RAW files within the current 
+    directory are converted to JPEG format.  EXIF information is copied
+    from the source image to the JPEG image after conversion.
+USAGE
+}
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--help)
+        usage
+        exit 1
+        ;;
+    (-*)
+        echo $prog: Illegal option -- $1 >&2
+        exit 1
+        ;;
+    (*)
+        break
+        ;;
+    esac
+    shift
+done
+
+files=( "$@" )
+[[ -z ${files[*]} ]] && {
+    files=( * )
+}
+
+for f in "${files[@]}" ; do 
+    case $f in
+    (*.raf|*.RAF) ;;
+    (*.tif|*.TIF) ;;
+    (*)
+        continue
+        ;;
+    esac
+    [[ ! -f $f ]] && {
+        echo $prog: File not found -- $f >&2
+        continue
+    }
+    target=${f%.???}.jpg
+    [[ -f $target ]] && {
+        echo $prog: File already exists -- $target >&2
+	continue
+    }
+    convert -verbose -monitor -quality 99 $f $target
+    exiftool -TagsFromFile $f $target
+    [[ -f ${target}_original ]] && {
+        rm -fv ${target}_original
+    }
+done

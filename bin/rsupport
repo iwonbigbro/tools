@@ -1,0 +1,21 @@
+#!/bin/bash
+#
+# Support token script for creating an rsupport token file
+# that, while the file exists, the gateway connections will
+# remain open.  As soon as the file is remove, the connection
+# will be closed.
+
+tokenfile="$(mktemp /tmp/rsupport_XXXXXX)"
+
+echo $PID >$tokenfile
+
+# Allow any user to remove the token files
+chmod 777 $tokenfile
+
+while [[ -f $tokenfile ]] ; do
+    # Wait for 60 seconds before checking 
+    # the token file again.
+    sleep 60
+done
+
+exit 0

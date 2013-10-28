@@ -1,0 +1,51 @@
+#!/bin/bash
+
+declare lprog=$0
+declare rprog=$(readlink $0 || echo $0)
+declare prog=${rprog##*/}
+declare progdir=${rprog%/*}
+declare pidfile="/var/run/$prog.pid"
+declare ret=1
+declare opts="-auvlHpF"
+declare del_opt=
+
+# Internal options
+declare flag_noisy=0
+
+if [[ $(id -u) -ne 0 ]]; then
+    exec sudo $0 "$@"
+fi
+
+declare -a extra_opts=( )
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--noisy)
+        flag_noisy=1
+        ;;
+    (*)
+        extra_opts[${#extra_opts[*]}]="$1"
+        ;;
+    esac
+    shift
+done
+
+# Reduce output from script
+if [[ $flag_noisy -ne 1 ]] ; then
+    exec 1>/dev/null
+fi
+
+if [[ -f $pidfile ]] ; then
+    echo "Error: $prog is already running ($pidfile: $(cat $pidfile))" >&2
+    exit 1
+fi
+
+if [[ "${lprog%clean}" != "$lprog" ]] ; then
+    del_opt="--delete"
+fi
+
+trap "rm -f $pidfile /tmp/rsync.$$.log" EXIT
+echo $$ >$pidfile
+
+# rsync up the directories
+echo rsync $opts --out-format \"%i %n %b\" ${extra_opts[*]} $del_opt /home /backup
+rsync $opts --out-format "%i %n %b" "${extra_opts[@]}" $del_opt /home /backup 

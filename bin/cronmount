@@ -1,0 +1,34 @@
+#!/bin/sh
+
+exec </dev/null
+
+err() {
+    echo >&2 "$*"
+    exit 1
+}
+
+for mp ; do
+    awk '
+        BEGIN { e=1 }
+        $2 == "'$mp'" { e=0 }
+        END { exit e }
+    ' /proc/mounts && continue
+
+    fs=`awk '$2 == "'$mp'" { print $1 }' /etc/fstab` &&
+    [ -n "$fs" ] || err "$mp not found in /etc/fstab"
+
+    case "$fs" in
+    UUID=*)
+	uuid=`echo $fs | sed 's?^UUID=??'`
+        fs=`readlink -f /dev/disk/by-uuid/$uuid`
+        ;;
+    esac
+
+    [ -e "$fs" ] || err "$fs device not found"
+
+    fsck -y $fs || err "$fs fsck failed"
+
+    mount $mp || err "$mp mount failed"
+done
+
+exit 0

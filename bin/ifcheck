@@ -1,0 +1,35 @@
+#!/bin/sh
+
+#exec 2>/dev/null
+
+tmp=`mktemp /tmp/ifcheck.XXXXXX`
+ifconfig $1 >$tmp
+
+trap "rm -f $tmp" EXIT
+
+ifattr() {
+    awk '
+    BEGIN { e=1 }
+    /'"$1"':/ { 
+        print gensub(/^.*'"$1"':([0-9\.]+).*$/, "\\1", "");
+        e = 0;
+    }
+    END { exit e }' $tmp
+}
+
+chkip() {
+    ping -c 1 -w 1 -q $1 >/dev/null 2>&1
+}
+
+(
+    ! pppAddr=`ifattr "P-t-P"` || chkip $pppAddr || exit 1
+    ifAddr=`ifattr "inet addr"` || exit 1
+
+    chkip www.google.com ||
+    chkip www.bt.com ||
+    exit 1
+) || (
+    ifdown $1
+    sleep 5
+    ifup $1
+)

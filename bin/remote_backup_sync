@@ -1,0 +1,4 @@
+#!/bin/bash
+
+script=${0%_sync}
+ssh -p 9122 cphillip@buffalo "sudo tee /sbin/${script##*/} >/dev/null && sudo chmod 755 /sbin/${script##*/}" < $script

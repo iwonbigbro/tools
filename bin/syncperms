@@ -1,0 +1,10 @@
+#!/bin/sh
+#
+# Sync permissions on home directories so they match their retrospective owner
+
+for dir in /export/home/* ; do
+    [ ${dir##*/} = "tools" ] && continue
+
+    owngrp=`stat -c %U:%G $dir`
+    nice -n 20 chown -R $owngrp $dir
+done

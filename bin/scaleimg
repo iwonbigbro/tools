@@ -1,0 +1,51 @@
+#!/bin/bash
+#
+# Rescaler for /home/share drop off
+
+export sdir=${1%/*}
+export sfilename=${1##*/}
+export sfile=$1
+
+[[ $sdir == $sfile ]] && sdir=
+[[ ! -f $sfile ]] && {
+    echo "Error: File not found -- $sfile" >&2
+    exit 1
+}
+
+# Ensure type is supported
+ftype=$(file -bi $sfile)
+case $ftype in
+(image/*) ;;
+(*)
+    echo "Error: Unsupported filetype -- $sfile ($ftype)" >&2
+    exit 1
+    ;;
+esac
+
+# Determine output file
+outf=${sdir:+${sdir}/}${sfilename%.*}_scaled.jpg
+[[ -f $outf ]] && rm -f $outf
+
+case $sfilename in
+(*_scaled.???)
+    exit 0
+    ;;
+(*)
+    export lock="/var/run/${0##*/}"
+    while true ; do
+	sleep $(( $RANDOM % 20 ))
+        [[ ! -f $lock ]] && break
+        ps -p $(cat $lock) >/dev/null || break
+    done
+    echo $$ >$lock
+    trap "rm -f $lock" EXIT
+
+    perms=$(stat -c %U:%G $sfile)
+    nice -n 1 convert -sample 800 $sfile $outf
+    [[ -s $outf ]] && {
+	chown $perms $outf
+        chmod 666 $outf
+        rm -f $sfile
+    }
+    ;;
+esac

@@ -1,0 +1,172 @@
+#!/bin/bash
+#
+# Will read the exif information from a digital image and produce a filename
+# based on the date he image was taken.
+
+prog=${0##*/}
+printname=0
+touchfile=0
+filetime=0
+writeback=0
+rename=0
+customout=0
+
+function usage() {
+    cat <<USAGE
+Usage: $prog [options] FILE
+Options:
+    -p --print-name       Prepend output with the original filename
+    -t --touch-file       Update file modification time with the actual
+                          image generation time
+    -y --year             Output the year of the image
+    -m --month            Output the month of the image
+    -d --day-of-month     Output the day of month of the image
+    -f --file-time        Allow fallback to modification time of file if exif
+                          tags are missing
+    -w --write-back       Write back the creation time to exif tags
+    -r --rename           Rename file to match generated name
+       --dest             Destination directory
+
+    --debug               Debugging information
+
+Example:
+    $prog -p picture.jpg
+    $prog -t picture.jpg
+USAGE
+}
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (-y|--year)
+        showyear=1
+        ;;
+    (-m|--month)
+        showmonth=1
+        ;;
+    (-d|--day-of-month)
+        showdom=1
+        ;;
+    (-p|--print-name)
+        printname=1
+        ;;
+    (-t|--touch-file)
+        touchfile=1
+        ;;
+    (-f|--file-time)
+        filetime=1
+        ;;
+    (-w|--write-back)
+        writeback=1
+        ;;
+    (-r|--rename)
+        rename=1
+        ;;
+    (--dest|--destination-directory)
+        destdir="$2"
+        [[ -d "$destdir" ]] || {
+            echo $prog: No such directory -- $destdir >&2
+            exit 1
+        }
+        [[ -w "$destdir" ]] || {
+            echo $prog: Permission denied -- $destdir >&2
+            exit 1
+        }
+        shift
+        ;;
+    (--debug)
+        set -x
+        ;;
+    (--help)
+        usage
+        exit 1
+        ;;
+    (-*)
+        echo $prog: Illegal option -- $1 >&2
+        exit 1
+        ;;
+    (*)
+        break
+        ;;
+    esac
+    shift
+done
+
+[[ -n "${showyear}${showmonth}${showdom}" ]] && {
+    [[ $rename -eq 1 ]] && {
+        echo $prog: Ignoring rename option, used with ${showyear:+--year }${showmonth:+--month }${showdom:+--day-of-month } >&2
+        rename=0
+    }
+}
+
+errors=0
+while [[ $# -gt 0 ]] ; do
+    f="$1"
+    shift
+
+    [[ ! -f $f ]] && {
+        echo $prog: File not found -- $f >&2
+        (( errors++ ))
+        continue
+    }
+
+    missingexif=0
+    name="$(exiv2 print $f 2>/dev/null | awk '/^Image timestamp/ { gsub(/:/, ""); print $3"_"$4; exit}')"
+    [[ $? -ne 0 || ${#name} -ne 15 ]] && {
+        # Try using exiftool, it's slower but it does the job
+        name="$(exiftool -DateTimeOriginal $f 2>/dev/null | awk '/^Date.Time Original/ { gsub(/:/, ""); print $3"_"$4; exit}')"
+        [[ $? -ne 0 || ${#name} -ne 15 ]] && {
+            [[ $filetime -eq 1 ]] && {
+                missingexif=1
+                name="$(date -r $f +%Y%m%d_%H%M%S)"
+                echo $prog: Falling back to file modification time -- $f : $name >&2
+            }
+        }
+    }
+    [[ ${#name} -ne 15 ]] && {
+        echo $prog: Failed to extract Generated Date -- $f >&2
+        (( errors++ ))
+        continue
+    }
+    ts="${name//[^0-9]/}"
+    ts="${ts:0:12}.${ts:12}"
+
+    dir="${f%/*}"
+    [[ $dir == $f ]] && dir=
+    ext="${f##*.}"
+    [[ $ext == $f ]] && ext="${f:$((${#f} - 3))}"
+    ext="$(echo $ext | tr '[[:upper:]]' '[[:lower:]]')"
+
+    [[ $printname -eq 1 ]] && printf "%q " $f
+    [[ $writeback -eq 1 && $missingexif -eq 1 ]] && exiftool -DateTimeOriginal="$ts" $f 1>&2
+    [[ $touchfile -eq 1 && ${#ts} -eq 15 ]] && touch -t $ts $f
+
+    [[ -n "${showyear}${showmonth}${showdom}" ]] && {
+        printf "%q " ${showyear:+${name:0:4}} \
+            ${showmonth:+${name:4:2}} \
+            ${showdom:+${name:6:2}}
+        printf "\n"
+        continue
+    }
+
+    [[ -n $destdir ]] && dir="${destdir%/}"
+    exifname="${dir:+$dir/}$name.$ext"
+    printf "%q\n" "$exifname"
+    [[ $rename -eq 1 ]] && {
+        [[ -f "$exifname" ]] && {
+            echo $prog: File already exists -- $exifname >&2
+            (( errors++ ))
+            continue
+        }
+        [[ "$f" == "$exifname" ]] && {
+            echo $prog: Name matches existing -- $exifname >&2
+            (( errors++ ))
+            continue
+        }
+        mv -vn "$f" "$exifname" || {
+            (( errors++ ))
+            continue
+        }
+    }
+done
+
+[[ $errors -eq 0 ]]

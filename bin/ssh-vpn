@@ -1,0 +1,207 @@
+#!/bin/bash
+#
+# Create a VPN connection over SSH
+
+prog=${0##*/}
+progdir=${0%/*}
+
+set -x
+
+viface="tun0"
+riface="eth0"
+liface="eth0"
+laddr="10.99.99.1"
+raddr="10.99.99.2"
+remotegw="192.168.1.1"
+remotenw="192.168.1.0"
+netmask="255.255.255.0"
+hostname=
+ipaddr=
+action=
+
+cfgvars=( \
+    viface \
+    riface \
+    liface \
+    laddr \
+    raddr \
+    ipaddr \
+    remotegw \
+    remotenw \
+    netmask \
+    hostname \
+    action \
+)
+
+if [[ $UID -ne 0 ]] ; then
+    echo Error: root privelidge required >&2
+    exit 1
+fi
+
+function usage() {
+    cat <<USAGE
+Usage: $prog [options] action hostname
+Options:
+    --vpn-iface IFACE         A unique identifier for the VPN interface (def. $viface)
+    --remote-iface IFACE      The remote interface that connects us to the network (def. $riface)
+    --local-iface IFACE       The local interface that connects us to the VPN host (def. $liface)
+    --local-address ADDR      The IP address of the local VPN point (def. $laddr)
+    --remote-address ADDR     The IP address of the remote VPN point (def. $raddr)
+    --remote-gateway ADDR     The internal IP address of the remote gateway (def. $remotegw)
+    --netmask NETMASK         The IP address of the remote VPN point (def. $netmask)
+
+    hostname                  The hostname of the remote host that is hosting the VPN network
+    action                    The action to take on the VPN connection (up, down)
+USAGE
+}
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--vpn-iface)
+        viface=$2
+        shift
+        ;;
+    (--local-iface)
+        liface=$2
+        shift
+        ;;
+    (--remote-iface)
+        riface=$2
+        shift
+        ;;
+    (--local-address)
+        laddr=$2
+        shift
+        ;;
+    (--remote-address)
+        raddr=$2
+        shift
+        ;;
+    (--netmask)
+        netmask=$2
+        shift
+        ;;
+    (--remote-gateway)
+        remotegw=$2
+        shift
+        ;;
+    (--help)
+        usage
+        exit 0
+        ;;
+    (--*)
+        echo Error: Invalid option -- $1 >&2
+        exit 1
+        ;;
+    (*)
+        if [[ -z $action ]] ; then
+            action=$1
+        elif [[ -z $hostname ]] ; then
+            hostname=$1
+        else
+            echo Error: Too many command line arguments >&2
+            exit 1
+        fi
+        ;;
+    esac
+    shift
+done
+
+if [[ -z $action ]] ; then
+    echo Error: No action specified >&2
+    usage
+    exit 1
+fi
+
+cfg=/var/run/${viface}-conf
+lock=/var/run/${viface}-lock
+cmd=/var/run/${viface}-cmd
+
+# Setup configuration file for later
+case $action in
+(up)
+    if [[ -z $hostname ]] ; then
+        echo Error: No hostname specified >&2
+        usage
+        exit 1
+    fi
+
+    remotenw=${remotegw%.*}.0
+    localgw=$(netstat -nr | awk '/^0\.0\.0\.0/{print $2}')
+    ipaddr=$(host -s -4 ${hostname##*@} | awk '/has\ address/{print $4}')
+
+    if [[ -z $ipaddr ]] ; then
+        echo Error: Failed to obtain host IP address -- ${hostname##*@} >&2
+        exit 1
+    fi
+    if [[ -z $localgw ]] ; then
+        echo Error: Failed to local gateway >&2
+        exit 1
+    fi
+    if [[ -f $lock ]] ; then
+        echo Error: A VPN connection is already open according to lock file -- $lock >&2
+        exit 1
+    fi
+    for e in "${cfgvars[@]}" ; do
+        eval 'echo '$e'=$'$e
+    done >$cfg
+    ;;
+(down)
+    if [[ ! -f $lock ]] ; then
+        echo Error: No lock file present for VPN connection on $viface >&2
+        exit 1
+    fi
+    source $cfg
+    ;;
+(*)
+    echo Error: Invalid action -- $action >&2
+    exit 1
+    ;;
+esac
+
+iptrule="POSTROUTING -s ${raddr%.*}.0/$netmask -o $riface -j MASQUERADE"
+
+# Establish the SSH connection and tunnel devices
+case $action in
+(up)
+    cat >$cmd <<VPNCMD
+#!/bin/bash
+set -e
+set -x
+ifconfig $viface address $raddr
+ifconfig $viface pointopoint $laddr
+ifconfig $viface netmask $netmask
+arp -sD $laddr $riface
+iptables -A $iptrule
+VPNCMD
+    exit 2
+    rcmd=/tmp/ssh-vpn.sh
+    if ! cat $cmd | ssh -S $lock -M -f -w 0:0 $hostname "cat >$rcmd && chmod 700 $rcmd && $rcmd" ; then
+        echo Error: Failed to create VPN connection >&2
+        ssh -S $lock -O exit $hostname "iptables -D $iptrule; ifconfig down $viface"
+        rm -f $cfg $lock $cmd
+        exit 1
+    fi
+    rm -f $cmd
+
+    route add -net $remotenw netmask $netmask gw $laddr $viface
+    route add $ipaddr gw $localgw $liface
+    route add default gw $remotegw
+    route del default gw $localgw
+    ;;
+(down)
+    exit 2
+    route add default gw $localgw
+    route del default gw $remotegw
+    route del $ipaddr gw $localgw $liface
+    route del -net $remotenw netmask $netmask gw $laddr $viface
+
+    if ! ssh -S $lock -O exit $hostname "iptables -D $iptrule; ifconfig down $viface" ; then
+        echo Error: Failed to close VPN connection >&2
+        exit 1
+    fi
+    rm -f $cfg $lock
+    ;;
+esac
+
+exit 0

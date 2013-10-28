@@ -1,0 +1,10 @@
+#!/bin/sh
+#
+# Runs commands, while supressing output unless the command terminates with a non
+# zero exit code.  When this happens, all output on both stdout and stderr is dumped.
+
+out=`mktemp /tmp/${0##*/}.XXXXXX`
+
+trap "rm -f $out" EXIT
+
+eval "$@" 1>$out 2>&1 || { e=$? ; cat $out ; exit $e }

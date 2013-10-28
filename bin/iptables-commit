@@ -1,0 +1,76 @@
+#!/bin/bash
+#
+# Incremental backup for iptables
+
+prog=${0##*/}
+dir="/etc/iptables"
+latest="$dir/latest"
+testing="$dir/testing"
+config="$dir/config"
+export SVNROOT="file:///export/svn"
+
+function get_config() {
+    [[ -f $config ]] && {
+        local IFS="="
+        while read setting value ; do
+            case $setting in
+            (latest) latest="$value" ;;
+            (testing) testing="$value" ;;
+            esac
+        done < $config
+    }
+}
+get_config
+
+[[ $UID -ne 0 ]] && {
+    echo $prog: Root privelidges required >&2
+    exit 1
+}
+
+[[ -x "$(which svn)" ]] || {
+    echo $prog: SVN is not installed >&2
+    exit 1
+}
+
+[[ -f $latest ]] || {
+    (
+        echo Updating the rules module from the SVN repository
+        set -e
+        set -x
+        cd $dir
+        svn up -q
+        [[ -f latest ]] || {
+            touch latest
+            svn add -q latest
+            svn ci -q -m "$prog: initial commit" latest
+            cvs up -q
+        }
+    ) || exit 1
+}
+
+[[ -f $testing ]] || {
+    echo File not found -- $testing >&2
+    exit 1
+}
+
+testcheck="${testing%/*}/.${testing##*/}.check"
+[[ ! -f $testcheck || $(date -r $testing +%s) -gt $(date -r $testcheck +%s) ]] && {
+    cat >&2 <<HERE
+WARNING: The rules attempted to be committed have not yet been tested since
+         they were last modified.  Please ensure you have run iptables-test
+         before attempting to commit the modifications permenently.
+HERE
+    exit 1
+}
+
+diff $latest $testing >/dev/null || {
+    cp -v $testing $latest
+}
+
+svn diff -N -x -p $latest && {
+    echo Committing local copy to SVN respository
+    svn ci -q -m "$prog: $(date +%Y%m%d_%H%M.%S)" $latest $testing
+    svn up -q $latest $testing
+}
+
+exit 0

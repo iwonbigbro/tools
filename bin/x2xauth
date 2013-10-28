@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# export and import of auth cookies for X server and x2x
+
+RPROG=$(readlink -m $0)
+PROG=$(basename $RPROG)
+PROGDIR=$(dirname $RPROG)
+
+nextract_file=
+nextract_host=
+run_x2x=
+run_x2x_position=
+mode=
+display=${DISPLAY:-:0.0}
+
+function usage() {
+    cat <<USAGE
+Usage: $PROG [options]
+
+Options:
+    -i hostname              Import magic-cookie from hostname (see -e)
+    -e                       Export magic-cookie from display (see -d)
+    -d display               Display to export from (default \$DISPLAY)
+    -x position              Launch x2x with position (see Positions)
+
+Positions:
+    north, south, east, west
+
+Example:
+    $PROG -e -d :0.1
+    $PROG -e
+    $PROG -i machine1 -x east
+    $PROG -i machine2 -x west
+USAGE
+}
+
+while getopts "?i:ex:d:" OPT ; do
+    case $OPT in
+    (i)
+        mode=I
+        nextract_host=$OPTARG
+        nextract_file=$HOME/nextract.$nextract_host
+        
+        if [[ ! -f $nextract_file ]] ; then
+            echo Error: No such file or directory -- $nextract_file >&2
+            exit 1
+        fi
+        ;;
+    (e)
+        mode=E
+        nextract_file=$HOME/nextract.$(hostname)
+        ;;
+    (x)
+        run_x2x=1
+        run_x2x_position=$OPTARG
+        ;;
+    (d)
+        display=$OPTARG
+        ;;
+    (*)
+        usage
+        exit 1
+        ;;
+    esac
+done
+
+shift $(($OPTIND - 1))
+
+case $mode in
+(E)
+    touch $nextract_file
+    chmod 600 $nextract_file
+    if ! xauth nextract $nextract_file $display ; then
+        rm -f $nextract_file
+    fi
+    ;;
+(I)
+    if xauth nmerge $nextract_file ; then
+        rm -f $nextract_file
+    fi
+    ;;
+(*)
+    echo Error: Import or export not specified >&2
+    exit 1
+esac
+
+if [[ $run_x2x -eq 1 ]] ; then
+    if [[ -z "$run_x2x_position" ]] ; then
+        echo Error: No position specified for x2x >&2
+        exit 1
+    fi
+
+    ssh -fXC $nextract_host "x2x -to :0 -$run_x2x_position"
+fi
+
+exit 0

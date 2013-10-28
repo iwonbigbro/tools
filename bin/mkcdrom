@@ -1,0 +1,118 @@
+#!/bin/bash
+
+# create a cd-rom iso fs base on files in $ISOFILES
+declare PROG=$(basename $0)
+declare PROGDIR=$(basename $0)
+declare CDRECORD_DEV=
+declare CDRECORD_CMD="cdrecord"
+declare CDRECORD_OPTS=
+declare CDRECORD_ARGS="fs=6m speed=2 dev=%DEV -"
+declare MKCDROM_CMD=
+declare VERBOSE=0
+
+function usage() {
+    cat <<USAGE
+Usage: $PROG [options]
+Options:
+    --test-run           Don't write anything, just go through the motions
+    --iso-image <file>   Path to iso image to write to disk
+    --directory <path>   Path to directory containing files to write to disk
+    --eject              Eject device when finished
+    --verbose            Verbose mode (specify more than once to increase output)
+    --debug              Debug output
+USAGE
+}
+
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    (--test-run)
+        CDRECORD_OPTS="-dummy $CDRECORD_OPTS"
+        ;;
+    (--iso-image)
+        if [[ ! -f $2 ]] ; then
+	    echo Error: File not found -- $2 >&2
+	    exit 1
+	fi
+
+	case "$(file -bi $2)" in
+        ("application/x-iso9660") ;;
+        ("application/x-iso9660-image") ;;
+        (*)
+	    echo Error: ISO image is not ISO 9660 compliant -- $2 >&2
+	    exit 1
+	esac
+
+	MKCDROM_CMD="cat $2"
+        shift
+	;;
+    (--directory)
+        if [[ ! -d $2 ]] ; then
+	    echo Error: No such directory -- $2 >&2
+	    exit 1
+	fi
+
+	if [[ $(ls $2 | wc -l) -eq 0 ]]; then
+	    echo Error: Directory is empty -- $2 >&2
+	    exit 1
+	fi
+
+	MKCDROM_CMD="mkisofs -iso-level 4 -max-iso9660-filenames -R $2"
+        shift
+	;;
+    (--eject)
+        CDRECORD_OPTS="$CDRECORD_OPTS -eject"
+        ;;
+    (--verbose)
+        VERBOSE=$(( $VERBOSE + 1 ))
+	case $VERBOSE in
+	(0|1|2|3)
+	    CDRECORD_OPTS="$CDRECORD_OPTS -v"
+	    if [[ $VERBOSE -eq 3 ]]; then
+	        set -o verbose
+            fi
+	    ;;
+	(*)
+	    CDRECORD_OPTS="$CDRECORD_OPTS -v -V"
+	    ;;
+	esac 
+        ;;
+    (--debug)
+        set -o xtrace
+	;;
+    (--*)
+        usage
+        exit 1
+        ;;
+    (*)
+        break
+        ;;
+    esac
+    shift
+done
+
+if [[ $VERBOSE -lt 2 ]]; then
+    CDRECORD_OPTS="-s $CDRECORD_OPTS"
+fi
+
+# device discovery
+while read NUM DEV MISC ; do 
+    if [[ ${NUM:0:3} = "---" ]] ; then
+        echo Error: No devices found >&2
+        exit 1
+    fi
+    eval ${DEV//dev=/CDRECORD_DEV=}
+    break
+done < <(wodim --devices | tail -n +3)
+
+if [[ -z $CDRECORD_DEV ]] ; then
+    echo Error: No devices found >&2
+    exit 1
+fi
+
+if ! $MKCDROM_CMD | $CDRECORD_CMD $CDRECORD_OPTS ${CDRECORD_ARGS//%DEV/$CDRECORD_DEV} ; then
+    echo Error: Failed to create ISO 9660 CDROM -- Error code $? >&2
+    exit 1
+fi
+
+echo ISO 9660 CDROM created successfully
+exit 0

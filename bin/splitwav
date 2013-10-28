@@ -1,0 +1,212 @@
+#!/usr/bin/perl
+
+# splits a wav file on key press Ctrl+C
+
+use strict;
+use sigtrap;
+use File::Basename;
+use Getopt::Std;
+use Fcntl qw/ F_SETFL F_GETFL O_NONBLOCK /;
+use Switch;
+use Term::ReadKey;
+use vars qw/ %opt /;
+
+my $prog = basename($0);
+my $verbose = 0;
+my $parent = $$;
+
+sub verbose_out {
+    if ($verbose) {
+        foreach(@_) {
+            print STDOUT $_;
+        }
+        print "\n";
+    }
+}
+
+sub usage() {
+    print STDERR <<"USAGE";
+This script will play a WAV file and will split the file
+upon receiving the interrupt signal.  It will continue to
+play the file until there is not more data left in the
+input WAV file.
+
+Usage: $prog [options] file.wav
+Options:
+    -t file             track listing file
+    -v                  verbose output
+    -s suffix           track name suffix
+    -\?                  usage
+
+Example: 
+    $prog -v -t tracks_01.txt some_file.wav
+USAGE
+
+    exit(1);
+}
+
+getopts("?t:s:v", \%opt) or usage();
+usage() if $opt{'?'};
+
+my $tracks = $opt{t} if ($opt{t});
+my $dsp = "| play -t wav - 2>/dev/null";
+if ($opt{d}) {
+    $dsp = shift;
+}
+my $suffix = $opt{s} if ($opt{s});
+if ($opt{v}) {
+    $verbose = 1;
+    verbose_out("Entering verbose mode");
+}
+my $file = shift;
+my $trackno = 0;
+my $trackpos = 0;
+my $outfile;
+my $buffer;
+my $child = 0;
+
+open(INF, "<" . $file) or die("Failed to open file for reading -- $file");
+binmode(INF);
+
+sub next_outfile() {
+    verbose_out("Checking tracks file -- $tracks");
+    if (defined($tracks)) {
+        open(TRACKS, "<" . $tracks) and 
+            seek(TRACKS, $trackpos, 0) or 
+            die("Failed to open file at position -- $tracks - $trackpos");
+
+        if ($outfile = <TRACKS>) {
+            $trackpos = tell(TRACKS);
+        } else {
+            $outfile = sprintf('%02d', $trackno++) . "-" . ($file =~ s/\ /_/g);
+            warn("Failed to read next track -- $tracks\n");
+        }
+
+        close(TRACKS) or 
+            die("Failed to close file -- $tracks\n");
+    } else {
+        verbose_out("Checking suffix -- $suffix");
+        if (defined($suffix)) {
+            $outfile = sprintf('%02d', $trackno++) . "-" . $suffix;
+        } else {
+            warn("No suffix or track listing, using output file -- $outfile\n");
+            $outfile = sprintf('%02d', $trackno++) . "-" . ($file =~ s/\ /_/g);
+        }
+    }
+
+    print(STDOUT "Creating track -- $outfile");
+    open(OUTF, ">" . $outfile) or 
+        die("Failed to open next track for writing -- $outfile");
+
+    verbose_out("Setting binmode -- $outfile");
+    binmode(OUTF);
+}
+
+sub splitwav() {
+    next_outfile();
+
+    verbose_out("Opening pipe -- $dsp");
+    
+    open(STDIN, "</dev/null") or
+        die("Failed to close STDIN");
+
+    if (open(DSP, $dsp)) {
+        binmode(DSP);
+
+        verbose_out("Preparing to read -- $file");
+        while(read(INF, $buffer, 65355)) {
+            verbose_out(length($buffer) . " bytes read");
+            if ($buffer) {
+                print(DSP $buffer) and 
+                    print(OUTF $buffer) or 
+                    die("Failed to flush buffer");
+            }
+        }
+        print(STDOUT "File exhausted -- $outfile\n");
+        print(STDOUT ($trackno + 1) . " tracks written\n");
+    }
+}
+
+sub cleanup() {
+    verbose_out("Cleaning up open files");
+    close(INF) or warn("Failed to close file -- $file");
+    close(OUTF) or warn("Failed to close file -- $outfile");
+    close(DSP) or warn("Failed to close file -- $dsp");
+}
+
+sub handle_hup {
+    verbose_out("Signal caught -- " . shift);
+    if ($$ == $parent) {
+        verbose_out("Parent is exiting");
+        exit(0);
+    } else {
+        next_outfile();
+    }
+}
+
+sub handle_int {
+    die("Interrupt");
+}
+
+sub handle_term {
+    die("Terminate");
+}
+
+sub die_handler {
+    print(STDERR "Signal caught -- " . shift);
+
+    if ($child > 0) {
+        verbose_out("Waiting for child -- $child");
+        waitpid($child, 0);
+    }
+
+    verbose_out("Resetting ReadMode");
+    if (! ReadMode(0)) {
+        warn("Failed to reset ReadMode -- $?");
+
+        verbose_out("Peforming hard terminal reset -- echo -n");
+        exec("echo -n");
+    }
+
+    verbose_out("Parent exiting -- $$");
+    exit(1);
+}
+
+sub die_handler_chld {
+    print(STDERR "Signal caught -- " . shift);
+    cleanup();
+
+    verbose_out("Child exiting -- $$");
+    exit(1);
+}
+
+$SIG{'PIPE'} = 'IGNORE';
+$SIG{'HUP'} = \&handle_hup;
+$SIG{'INT'} = \&handle_int;
+$SIG{'TERM'} = \&handle_term;
+$SIG{__DIE__}  = \&die_handler;
+
+if ($child = fork()) {
+    ReadMode(3);
+    verbose_out("Child process -- $child");
+    while(my $key = ReadKey(0)) {
+        verbose_out("Key input -- $key");
+        switch($key) {
+            case "t" {
+                kill 1, $child or
+                    die("Failed to signal child -- $child");
+            }
+        }
+    }
+} else {
+    $SIG{__DIE__}  = \&die_handler_chld;
+
+    open(STDIN, ">/dev/null") or
+        die("Failed to close STDIN");
+
+    splitwav();
+    cleanup();
+    kill 1, $parent;
+}
+
+exit(0);

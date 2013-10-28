@@ -1,0 +1,138 @@
+#!/bin/bash
+#
+# ssh-utils version 1.0
+#
+# A set of useful SSH utility functions.
+#
+# Copyright (C) 2009 Craig Phillips.  All rights reserved.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+function sshattach() {
+    local rprog=$_
+    local prog=${rprog##*/}
+    local do_detach=0
+    local do_debug=0
+    local tty=$(tty)
+    local stdout="${tty:-/dev/null}"
+    local stderr="${tty:-/dev/null}"
+
+    [[ -w $stdout ]] || stdout=/proc/self/fd/1
+    [[ -w $stderr ]] || stderr=/proc/self/fd/2
+    [[ -w $stdout ]] || stdout=/dev/null
+    [[ -w $stderr ]] || stderr=/dev/null
+
+    unset SSH_AGENT_PID
+    unset SSH_AUTH_SOCK
+
+    local opt=
+    while getopts "xdq" opt "$@" ; do
+        case $opt in
+        (q)
+            stderr="/dev/null"
+            stdout="/dev/null"
+            ;;
+        (x)
+            do_debug=1
+            set -o xtrace
+            ;;
+        (d)
+            do_detach=1
+            ;;
+        (*)
+            cat <<USAGE
+Summary:
+    This is a bash function that attempts to attach the current shell session
+    to an already running ssh-agent instance.  In order to do this, the process
+    must be invoked within the running shell and not as a subshell since it
+    needs to modify the running shell environment.
+
+    If a running agent is not present, one is started and the shell is attached
+    to the new instance of the shh-agent.
+
+Usage: $prog [options]
+
+Options:
+    -d             Detach from running agent and close the agent instance if
+                   this is the last shell to be attached on a host
+    -q             Silent operation
+    -x             Xtrace
+USAGE
+            return 1
+            ;;
+        esac
+    done 
+
+    local agent_pids="$(ps --no-heading -o pid -C ssh-agent 2>/dev/null)"
+    if [[ -z "$agent_pids" ]]; then
+        eval "ssh-agent -s" 1>/dev/null 2>$stderr
+    else
+        local pid=
+        local uid=
+        for pid in $agent_pids; do
+            uid="$(ps --no-heading -o uid -p $pid)"
+
+            if [[ $uid -ne $UID ]]; then
+        	continue
+            fi 
+
+            if [[ $do_detach -eq 1 ]]; then
+        	if [[ $(who | grep $LOGNAME | wc -l) -gt 1 ]]; then
+        	    # other logins still using agent
+        	    break
+        	fi
+        	kill $pid
+        	continue
+            fi
+
+            # awk trims it to remove leading spaces
+            local ppid="$(ps --no-heading -o ppid -p $pid | awk '{print $1}')"
+            ppid_match1=$(($pid - 1))
+            ppid_match2=$(($pid - 2))
+
+            local sockdir=
+            local sockfile=
+            for sockdir in /tmp/ssh-*; do
+        	for sockfile in $sockdir/agent.*; do
+        	    case $sockfile in
+        	    ($sockdir/agent.$pid)
+        		;;
+        	    ($sockdir/agent.$ppid)
+        		;;
+        	    ($sockdir/agent.$ppid_match1)
+        		;;
+        	    ($sockdir/agent.$ppid_match2)
+        		;;
+        	    (*)
+        		continue
+        		;;
+        	    esac
+
+        	    export SSH_AUTH_SOCK=$sockfile
+        	    export SSH_AGENT_PID=$pid
+        	done
+            done
+        done
+
+        # start the agent, its not running
+        if [[ $do_detach -ne 1 && -z "$SSH_AGENT_PID" ]]; then
+            eval "ssh-agent -s" >/dev/null 2>$stderr
+        fi
+    fi
+
+    if [[ $do_debug -eq 1 ]]; then
+        set +o xtrace
+    fi
+    return 0
+}

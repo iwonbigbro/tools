@@ -1,0 +1,52 @@
+#!/bin/bash
+
+function host() {
+    awk '/\ '$1'[ $]/{print $1; exit}' /etc/hosts
+}
+
+#$1 is the name of the list
+#$2 is the name of the token to replace 
+function each() {
+   local -a list=( $(eval echo \${$1}) )
+   local token=$2
+   shift 2
+   for rep in "${list[@]}" ; do
+       echo -n "${*//$token/$rep}\n"
+   done
+}
+
+#$1 is the condition
+function when() {
+    [[ $1 -ne 1 ]] && return
+    shift 1
+    echo -n "$*\n"
+}
+
+function config() {
+    awk 'BEGIN { beg=0; }; 
+        /_____CONFIG_START_____/{ beg=1; next; };
+        /_____CONFIG_END_____/{ exit; };
+        /^#/{ next; };
+        /^\s*$/{ next; };
+        (beg==1) { print; }' $1
+}
+
+function rules() {
+    awk 'BEGIN { beg=0; }; 
+        /_____CONFIG_END_____/{ beg=1; next; };
+        /^#/{ next; };
+        /^\s*$/{ next; };
+        (beg==1) { print; }' $1
+}
+
+function eval_rules() {
+    while read line ; do
+        eval echo -e $line
+    done < <(rules $1)
+}
+
+tmp_cfg=$(mktemp)
+trap "rm -f $tmp_cfg" EXIT
+config $1 >$tmp_cfg
+. $tmp_cfg
+eval_rules $1

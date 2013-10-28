@@ -1,0 +1,34 @@
+#!/bin/sh
+
+gw="`netstat -ntr | awk '/^0\.0\.0\.0\ *(10|172|192)\.[0-9]+\.[0-9]+\.[0-9]+/ { print $2 }'`"
+
+[ -n "$gw" ] && {
+    # Hop onto the gateway to get rid of the connection
+    /usr/bin/ssh -o PubkeyAuthentication=yes -o ConnectTimeout=30 $gw "cat >/tmp/tnlcls; /bin/sh /tmp/tnlcls; rm -f /tmp/tnlcls" <<HERE
+$0 `for a in "$@" ; do echo -n "'$a' " ; done`
+HERE
+    exit $?
+}
+
+[ "$USER" != "root" ] && {
+    exec sudo `which $0` "$@"
+}
+
+pids="`ps -C sshd -o pid --no-heading`"
+for pid in $pids ; do
+    cmdline="`sed 's/\x00/ /g; s/\ \+/ /g; s/\ $//;' /proc/$pid/cmdline 2>/dev/null | awk '/sshd:\ *mtunnel/ { print }'`"
+    [ -z "$cmdline" ] && continue
+    echo Terminating process -- $pid
+    kill $pid
+    n=0
+    while [ $n -lt 5 -a -d /proc/$pid ] ; do
+        sleep 1
+        n=`expr $n + 1`
+    done
+    [ -d /proc/$pid ] && {
+        echo Error: Failed to terminate process $pid -- $? >&2
+        exit 1
+    }
+done
+
+exit 0

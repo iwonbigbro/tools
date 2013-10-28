@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# Backup rootfs (SSD/SDCARD) to designated physical disk
+
+bkupdir="/export/rootfs"
+
+[ ${UID:-`id -u`} -ne 0 ] && {
+    echo Error: root privelidges required >&2
+    exit 1
+}
+
+[ ! -d $bkupdir ] && {
+    echo Creating directory -- $bkupdir
+    mkdir -p $bkupdir || {
+        echo Error: problem creating directory -- $bkupdir >&2
+        exit 1
+    }
+}
+
+rsync \
+    --archive \
+    --update \
+    --verbose \
+    --checksum \
+    --fuzzy \
+    --links \
+    --hard-links \
+    --perms \
+    --owner \
+    --group \
+    --backup \
+    --suffix=`date +.%Y%m%d_%H%M.%S` \
+    --timeout=0 \
+    --itemize-changes \
+    --one-file-system \
+    -F \
+/ $bkupdir

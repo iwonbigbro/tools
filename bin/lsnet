@@ -1,0 +1,13 @@
+#!/bin/bash
+#
+# Lists everything on a given subnet.
+
+sub=$1
+
+exec 3>/dev/null
+
+for (( i=1 ; i<255 ; i++ )) ; do
+    ( ping -c 1 $sub.$i 1>/dev/null && echo "$sub.$i $(host $sub.$i 2>/dev/null)" ) &
+done 2>&3
+
+wait

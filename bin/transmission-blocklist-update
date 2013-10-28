@@ -1,0 +1,95 @@
+#!/bin/bash
+
+prog=${0##*/}
+
+[[ ${UID:-1} -ne 0 ]] && {
+    echo $prog: Must be root to install blocklist updates >&2
+    exit 1
+}
+
+# Get the default settings
+unset CONFIG_DIR
+. /etc/default/transmission-daemon
+
+dtdir="${CONFIG_DIR:-/var/lib/transmission-daemon/info}"
+tmpdir=$(mktemp -d /tmp/$prog.XXXXXX)
+url="http://www.bluetack.co.uk/config"
+files=( "level1" )
+http_date=
+do_restart=
+
+function _logger() { logger "${istty:+-s}" -t "$prog" -- $*; }
+
+unset istty
+if tty 1>/dev/null 2>/dev/null ; then
+    istty=1
+else
+    exec 1>/dev/null
+    exec 2> >(_logger)
+fi
+
+trap "rm -rf $tmpdir" EXIT
+
+cd $tmpdir || exit 1
+[[ ! -d $dtdir/blocklists.arc ]] && {
+    mkdir -p $dtdir/blocklists.arc || exit 1
+}
+
+for file in "${files[@]}" ; do
+    (
+        set -e
+        lastmodified=
+        [[ -f $dtdir/blocklists.arc/$file.gz ]] && {
+            lastmodified="$(lwp-request -m HEAD -i $dtdir/blocklists.arc/$file.gz $url/$file.gz | awk '/^Last-Modified/ { print; }')"
+            lastmodified="${lastmodified#*:}"
+        }
+
+        # Some HTTP servers do not respond with "304 Not modified", so
+        # it requires some leg work to interrogate the last-modified
+        # date manually...
+        [[ -n $lastmodified ]] && {
+            _logger "Blocklist last modified: $(date -d "$lastmodified")"
+            _logger "Blocklist last updated:  $(date -r $dtdir/blocklists.arc/$file.gz)"
+            [[ $(date -d "$lastmodified" +%s) -lt $(date -r $dtdir/blocklists.arc/$file.gz +%s) ]] && {
+                _logger "Blocklist is up-to-date"
+                exit 1
+            }
+        }
+        _logger "Blocklist update available"
+
+        _logger "Downloading blocklist -- $url/$file.gz"
+        wget -q $url/$file.gz
+
+        [[ -f $dtdir/blocklists.arc/$file.gz && "$(md5sum < $file.gz)" == "$(md5sum < $dtdir/blocklists.arc/$file.gz)" ]] && {
+            _logger "Blocklist has not been modified"
+            exit 1
+        }
+
+        _logger "Archiving blocklist -- $file.gz"
+        cp $file.gz $dtdir/blocklists.arc/$file.gz
+
+        _logger "Extracting blocklist -- $file.gz"
+        gunzip $file.gz
+
+        for f in $dtdir/blocklists/$file* ; do
+            [[ -f $dtdir/blocklists/$file.bin ]] && {
+                _logger "Removing old blocklist -- $f"
+                rm -f $f
+            }
+        done
+
+        _logger "Installing new blocklist -- $file"
+        cp -v $file $dtdir/blocklists/$file
+    ) && do_restart=1
+done
+
+set -e
+[[ -n $do_restart ]] && {
+    _logger "Correcting permissions -- " $dtdir/blocklists*
+    chown -R debian-transmission:debian-transmission $dtdir/blocklists*
+
+    _logger "Restarting transmission-daemon"
+    /etc/init.d/transmission-daemon restart
+}
+
+exit 0

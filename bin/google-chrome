@@ -1,0 +1,17 @@
+#!/bin/bash
+
+prog=${0##*/}
+args=( "$@" )
+launch="google-chrome"
+userdatadir="$HOME/.config/$launch.$HOSTNAME"
+
+[[ $prog = "chromium-browser"* ]] && {
+    launch="chromium-browser"
+}
+
+[[ $prog = *"-temp" ]] && {
+    userdatadir="`mktemp -d /tmp/$launch.XXXXXX`"
+    trap "rm -rf $userdatadir" EXIT
+}
+
+/usr/bin/$launch "--user-data-dir=$userdatadir" "$@"

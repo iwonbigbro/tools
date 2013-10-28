@@ -1,0 +1,4 @@
+#!/bin/bash
+
+sudo mount -t vfat -o dmask=0002,fmask=0113,gid=floppy,rw,users,group,noauto,sync $1 $2
+exit $?

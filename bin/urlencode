@@ -1,0 +1,11 @@
+#!/usr/bin/perl
+
+use URI::Escape;
+
+if ($0 =~ "urldecode") {
+    print uri_unescape(@ARGV);
+} else {
+    print uri_escape(@ARGV);
+}
+
+print "\n";

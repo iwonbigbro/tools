@@ -7,4 +7,4 @@ out=`mktemp /tmp/${0##*/}.XXXXXX`
 
 trap "rm -f $out" EXIT
 
-eval "$@" 1>$out 2>&1 || { e=$? ; cat $out ; exit $e }
+eval "$@" 1>$out 2>&1 || { e=$? ; cat $out ; exit $e ; }

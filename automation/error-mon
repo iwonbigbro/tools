@@ -1,0 +1,36 @@
+#!/bin/sh
+
+# Copyright (C) 2013 Craig Phillips.  All rights reserved.
+
+set -eu
+
+prog=${0##*/}
+statedir=/var/log/$prog/states
+
+mkdir -p $statedir
+
+log=$1
+logname=${log##*/}
+state=$statedir/$logname.state
+errs=$statedir/$logname.errs
+
+[ ! -f $state ] || . $state
+
+log_last=${log_last:-1}
+log_len=`wc -l < $log`
+
+[ $log_last -ne $log_len ] || exit 0
+[ $log_last -lt $log_len ] || log_last=1
+
+tail -n +$log_last $log | grep -i error >$errs
+cat >$state <<HERE
+log_len=$log_len
+HERE
+
+[ -s $errs ] || exit 0
+
+for x in /etc/$prog.d/* ; do
+    [ -x $x ] || continue
+
+    ( . $x $errs ) || true
+done

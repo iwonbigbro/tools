@@ -1,0 +1,24 @@
+#!/bin/sh
+
+PACMAN=/usr/bin/pacman
+
+case $1 in
+(-*)
+    exec $PACMAN "$@"
+    ;;
+(search)
+    shift
+    exec $PACMAN -Ss "$@"
+    ;;
+(install)
+    shift
+    exec $PACMAN -Sy "$@"
+    ;;
+(upgrade)
+    shift
+    exec $PACMAN -Syu "$@"
+    ;;
+esac
+
+echo >&2 "${0##*/}: Error: Unsupported command"
+exit 1

@@ -1,0 +1,61 @@
+#!/bin/sh
+
+set -e
+
+rprog=`readlink -f $0 || echo $0`
+prog=`basename $rprog`
+
+function usage() {
+    cat <<USAGE
+Usage: $prog [--enable|--disable]
+Summary:
+    Enables/disables power resume behaviour.  That is whether or not
+    the device should power back on after losing power, once the power
+    has been restored.
+USAGE
+}
+
+while [ $# -gt 0 ] ; do
+    case $1 in
+    (-\?|--help)
+        usage
+        exit 0
+        ;;
+    (-e|--enable)
+        enable_power_resume=1
+        ;;
+    (-d|--disable)
+        enable_power_resume=0
+        ;;
+    (-*)
+        echo >&2 "$prog: Error: Invalid option"
+        exit 1
+        ;;
+    (*)
+        echo >&2 "$prog: Error: Invalid argument"
+        exit 1
+        ;;
+    esac
+    shift
+done
+
+[ -n "$enable_power_resume" ] || {
+    echo >&2 "$prog: Error: Specify --enable or --disable"
+    usage
+    exit 1
+}
+
+# export both gpios
+echo 47 >/sys/class/gpio/export
+echo 49 >/sys/class/gpio/export
+
+# 49 out, value 1
+echo "out" >/sys/class/gpio/gpio49/direction
+echo 1 >/sys/class/gpio/gpio49/value
+
+# 47 out, value 1
+echo "out" >/sys/class/gpio/gpio47/direction
+echo $enable_power_resume >/sys/class/gpio/gpio47/value
+
+# set 49 value 0
+echo 0 >/sys/class/gpio/gpio49/value

@@ -1,6 +1,8 @@
 #!/bin/sh
 
-bkupdir="/backup/"
+set -eux
+
+bkupdir="/backup"
 
 [ ${UID:-`id -u`} -ne 0 ] && {
     echo Error: root privelidges required >&2
@@ -15,6 +17,12 @@ bkupdir="/backup/"
     }
 }
 
+umount $bkupdir/boot ||
+umount $bkupdir ||
+true
+
+mount $bkupdir
+
 rsync \
     --archive \
     --update \
@@ -26,19 +34,35 @@ rsync \
     --perms \
     --owner \
     --group \
-    --backup \
-    --suffix=`date +.%Y%m%d_%H%M.%S` \
     --timeout=0 \
     --itemize-changes \
     --one-file-system \
-    --exclude=$bkupdir \
-    --exclude="/dev/*" \
-    --exclude="/proc/*" \
-    --exclude="/sys/*" \
+    --exclude="$bkupdir" \
     --exclude="/tmp/*" \
     --exclude="/run/*" \
-    --exclude="/mnt/*" \
-    --exclude="/media/*" \
     --exclude="/lost+found" \
     -F \
-/ $bkupdir
+/ $bkupdir/
+
+mount $bkupdir/boot
+
+rsync \
+    --archive \
+    --update \
+    --verbose \
+    --checksum \
+    --fuzzy \
+    --links \
+    --hard-links \
+    --perms \
+    --owner \
+    --group \
+    --timeout=0 \
+    --itemize-changes \
+    --one-file-system \
+    --exclude="/lost+found" \
+    -F \
+/boot/ $bkupdir/boot/
+
+umount $bkupdir/boot
+umount $bkupdir

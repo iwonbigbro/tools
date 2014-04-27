@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# Ensures that when the ath9k driver crashes, it is reloaded and networking
+# is restored.
+
+if ! lsmod | grep ath9k 1>/dev/null 2>&1 ; then
+    tag=`basename $0`
+    echo "ath9k driver not found, attempting to reload..."
+
+    rmmod ath9k
+    if modprobe ath9k && netctl restart wlan0 ; then
+        echo "ath9k driver reload successful"
+    else
+        echo "ath9k driver reload failed"
+    fi
+
+    if ! systemctl restart miniupnpd ; then
+        echo "miniupnpd failed to restart"
+    fi
+fi 2>&1 | logger -t `basename $0`

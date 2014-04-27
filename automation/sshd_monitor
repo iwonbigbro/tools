@@ -1,0 +1,24 @@
+#!/bin/sh
+
+tail -n ${1:-0} -F /var/log/auth.log | awk '
+    !/sshd\[[0-9]+\]: / { next }
+    / from 192.168./ { next }
+    { sub(/^.*sshd\[[0-9]+\]: /, "") }
+    /Accepted password for/ {
+        sub(/^Accepted password for /, "");
+        user=$1;
+        sub(/^[^\ ]* /, "");
+        print "User "user" just logged in "$0;
+	fflush();
+	next
+    }
+#    /Failed password for/ {
+#        sub(/^Failed password for /, "");
+#        sub(/^invalid user /, "");
+#        user=$1;
+#        sub(/^[^\ ]* /, "");
+#        print "User "user" just failed to log in "$0;
+#	fflush();
+#	next
+#    }
+' | xargs -I '{}' mail -s '{}' root

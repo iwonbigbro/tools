@@ -1,8 +1,6 @@
 #!/bin/sh
-#
-# Backup rootfs (SSD/SDCARD) to designated physical disk
 
-bkupdir="/export/rootfs"
+bkupdir="/backup/"
 
 [ ${UID:-`id -u`} -ne 0 ] && {
     echo Error: root privelidges required >&2
@@ -33,5 +31,14 @@ rsync \
     --timeout=0 \
     --itemize-changes \
     --one-file-system \
+    --exclude=$bkupdir \
+    --exclude="/dev/*" \
+    --exclude="/proc/*" \
+    --exclude="/sys/*" \
+    --exclude="/tmp/*" \
+    --exclude="/run/*" \
+    --exclude="/mnt/*" \
+    --exclude="/media/*" \
+    --exclude="/lost+found" \
     -F \
 / $bkupdir

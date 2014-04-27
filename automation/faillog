@@ -1,0 +1,15 @@
+#!/bin/sh
+
+prog=`basename $0`
+output=`mktemp /tmp/$prog.XXXXXXX`
+
+trap "rm -f $output" EXIT
+
+faillog >$output
+
+[ -s $output ] || exit 0
+
+mail -s "Failed login attempts" root < $output || exit $?
+
+# Reset the log
+>/var/log/faillog

@@ -1,0 +1,9 @@
+[Unit]
+Description=SSH Daemon Connection Monitor
+
+[Service]
+ExecStart=/usr/tools/automation/sshd_monitor
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

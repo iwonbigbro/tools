@@ -1,0 +1,42 @@
+#!/bin/sh
+
+prog=`basename $0`
+tmpdir=`mktemp -d /tmp/$prog.XXXXXXXX`
+
+trap "rm -rf $tmpdir" EXIT
+
+get_entries() {
+    awk '/'"$1"'IN=/ {
+        gsub(/^.*SRC=/, "");
+        gsub(/ .*DPT=/, " ");
+        gsub(/ [A-Z].*/, "");
+        print
+    }' /var/log/iptables.log
+}
+
+get_host() {
+    host $1 2>/dev/null | awk '/domain name pointer/ {
+        gsub(/^.*domain name pointer /, "");
+        gsub(/\.$/, "");
+        print
+    }'
+}
+
+format_entries() {
+    awk '{ print $1 }' $1 | sort | uniq -c | sort -nr >$1-gb-ip
+
+    echo "Top ten connections by IP"
+    head $1-gb-ip | while read c ip ; do
+        printf "Connected %3d times from %-15s\n" "$c" "$ip"
+    done
+}
+
+check_and_send() {
+    get_entries $1 >$tmpdir/$1.log
+    [ -s $tmpdir/$1.log ] || return 0
+    format_entries $tmpdir/$1.log | mail -s "IPTables $1 summary" root
+}
+
+###############################################################################
+
+check_and_send BLACKLIST

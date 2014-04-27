@@ -2,6 +2,13 @@
 
 set -eux
 
+prog=${0##*/}
+progpid=$$
+proglock=/run/$prog.lock
+
+( set -o noclobber ; echo $progpid >$proglock ) || exit 1
+trap "rm -f $proglock" EXIT
+
 dt_start=$(date +%s)
 
 bkupdir="/backup"

@@ -71,6 +71,8 @@ rsync \
     -F \
 /boot/ $bkupdir/boot/
 
+sync ; sync ; sync
+
 umount $bkupdir/boot
 umount $bkupdir
 umount /boot

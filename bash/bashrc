@@ -1,5 +1,6 @@
-# .bashrc
+#!/bin/bash
 
+if [[ $0 != $BASH_SOURCE ]] ; then
 
 #exec 2> >(tee /tmp/stderr)
 #set -x
@@ -10,8 +11,8 @@ exec 3>/dev/null
 
 echo >&3 $(date) Executing bashrc
 
-export TOOLSDIR="/home/tools"
-declare -a includes=()
+export TOOLS_BASHRC=$(readlink -f "$BASH_SOURCE")
+export TOOLSDIR=${TOOLS_BASHRC%/bash/*}
 
 if [[ -t 0 ]] ; then
     includes=( \
@@ -21,14 +22,17 @@ if [[ -t 0 ]] ; then
         $TOOLSDIR/bash/aliases \
         $TOOLSDIR/bash/paths \
         $TOOLSDIR/bash/functions \
+	$HOME/.bash_env \
     )
 else
     includes=( \
         $TOOLSDIR/bash/env \
         $TOOLSDIR/bash/paths \
         $TOOLSDIR/bash/functions \
+	$HOME/.bash_env \
     )
 fi
+
 echo >&3 $(date) Loading includes
 for include in "${includes[@]}" ; do
     [[ -r $include ]] && . $include
@@ -96,3 +100,5 @@ echo >&3 $(date) Finished executing bashrc
 exec 3>&-
 
 # http://www.ukuug.org/events/linux2003/papers/bash_tips/
+
+fi # [[ $0 != $BASH_SOURCE ]]

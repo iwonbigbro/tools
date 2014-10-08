@@ -1,0 +1,80 @@
+" From bwhittak
+set showmatch
+set mouse=nvc
+set tagrelative
+set fileformats=unix,dos
+set fileencodings=ucs-bom,utf-8,default
+set encoding=utf-8
+set hlsearch
+set incsearch
+set showcmd
+set backspace=2
+set laststatus=2
+set formatoptions+=2n
+
+" Mine
+set autoindent
+set sm
+set shiftwidth=4
+set tabstop=4
+set expandtab
+"set mouse=a
+set hls
+set foldlevelstart=999
+set tags+=./ctags,../tags,../../tags,../../../tags,../../../../tags,../../../../../tags,../../../../../../tags,../../../../../../../tags,../../../../../../../../tags
+set tags+=./ctags,../ctags,../../ctags,../../../ctags,../../../../ctags,../../../../../ctags,../../../../../../ctags,../../../../../../../ctags,../../../../../../../../ctags
+set tags+=./.ctags,../.ctags,../../.ctags,../../../.ctags,../../../../.ctags,../../../../../.ctags,../../../../../../.ctags,../../../../../../../.ctags,../../../../../../../../.ctags
+set history=10000
+set ruler
+set modeline
+set pastetoggle=<F11>
+set undolevels=1000
+set dir=~/.vim/tmp//,/tmp//,.
+
+" For local replace
+nnoremap gr gd[{V%:s/<C-R>///gc<left><left><left>
+
+" For global replace
+nnoremap gR gD:%s/<C-R>///gc<left><left><left>
+
+" Colour scheme
+set bg=dark
+colorscheme evening
+
+if exists('+autochdir')
+    set autochdir
+endif
+
+" Persistent undo history
+if has("persistent_undo")
+    set undofile
+    set undodir=~/.vim/undo,/tmp,.
+endif
+
+" Spell checking
+if exists('+spell')
+    setlocal spell spelllang=en
+    set nospell
+
+    " Fix bad-word highlighting
+    hi SpellBad term=reverse ctermfg=gray ctermbg=1 gui=reverse guifg=gray guisp=Red
+    hi SpellCap term=reverse ctermfg=gray ctermbg=4 gui=reverse guisp=Blue endif
+
+filetype on
+filetype plugin on
+syntax on
+
+if has("autocmd")
+    au BufReadPost * if line("'\"") > 0 && line("'\"") <= line("$")
+        \| exe "normal g'\"" | endif
+    let g:xml_syntax_folding = 1
+    augroup MyAuto
+        " Remove all MyAuto autocommands
+        au!
+        autocmd BufRead,BufNewFile *.inc,*.d set filetype=make
+        autocmd FileType c,cpp  setlocal tabstop=4
+        autocmd FileType python setlocal tabstop=4 expandtab foldcolumn=2 foldmethod=indent
+        autocmd FileType xml,xslt setlocal tabstop=4 foldcolumn=2 foldmethod=syntax matchpairs+=<:>
+        autocmd FileType html   setlocal matchpairs+=<:>
+    augroup END
+endif

@@ -14,6 +14,12 @@ echo >&3 $(date) Executing bashrc
 export TOOLS_BASHRC=$(readlink -f "$BASH_SOURCE")
 export TOOLSDIR=${TOOLS_BASHRC%/bash/*}
 
+if [[ -e /usr/share/terminfo/x/xterm-256color ]] ; then
+    export TERM="xterm-256color"
+else
+    export TERM="xterm-color"
+fi
+
 if [[ -t 0 ]] ; then
     includes=( \
         /etc/bashrc \
@@ -22,14 +28,14 @@ if [[ -t 0 ]] ; then
         $TOOLSDIR/bash/aliases \
         $TOOLSDIR/bash/paths \
         $TOOLSDIR/bash/functions \
-	$HOME/.bash_env \
+        $HOME/.bash_env \
     )
 else
     includes=( \
         $TOOLSDIR/bash/env \
         $TOOLSDIR/bash/paths \
         $TOOLSDIR/bash/functions \
-	$HOME/.bash_env \
+        $HOME/.bash_env \
     )
 fi
 

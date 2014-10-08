@@ -38,8 +38,7 @@ nnoremap gr gd[{V%:s/<C-R>///gc<left><left><left>
 nnoremap gR gD:%s/<C-R>///gc<left><left><left>
 
 " Colour scheme
-set bg=dark
-colorscheme evening
+colorscheme hybrid
 
 if exists('+autochdir')
     set autochdir
@@ -58,7 +57,8 @@ if exists('+spell')
 
     " Fix bad-word highlighting
     hi SpellBad term=reverse ctermfg=gray ctermbg=1 gui=reverse guifg=gray guisp=Red
-    hi SpellCap term=reverse ctermfg=gray ctermbg=4 gui=reverse guisp=Blue endif
+    hi SpellCap term=reverse ctermfg=gray ctermbg=4 gui=reverse guisp=Blue
+endif
 
 filetype on
 filetype plugin on

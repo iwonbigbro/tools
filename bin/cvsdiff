@@ -1,0 +1,74 @@
+#!/bin/bash
+
+cvsdiff_sh=$(readlink -f "$BASH_SOURCE")
+
+function err() {
+    echo >&2 "${cvsdiff_sh%/*}: $*"
+    exit 1
+}
+
+TMPDIR=$(mktemp -d) || exit 1
+trap "rm -rf $TMPDIR" EXIT
+export TMPDIR
+
+revs=()
+
+while (( $# > 0 )) ; do
+    case $1 in
+    (-r*) revs=( "${revs[@]}" "${1#-r}" ) ;;
+    (-r) revs=( "${revs[@]}" "$2" ) ; shift ;;
+    (-*)
+        err "Illegal option: $1"
+        ;;
+    (*)
+        break
+        ;;
+    esac
+    shift
+done
+
+r1_rev=${revs[0]}
+r2_rev=${revs[1]}
+
+files=()
+
+shopt -s extglob
+
+if (( $# == 0 )) ; then
+    set - .
+fi
+
+for cf in "$@" ; do
+    while read st af <&3 ; do
+        d=${af%/*}
+        f=${af##*/}
+
+        if [[ $d == $f ]] ; then
+            d=$PWD
+        fi
+
+        if [[ -e $d/CVS/Repository ]] ; then
+            rf=$(cat $d/CVS/Repository)/$f
+        else
+            rf=$af
+        fi
+
+        r1=$TMPDIR/$f.${r1_rev:-head}
+
+        case $st in
+        (C|M) cvs -q co -p ${r1_rev:+-r $r1_rev} "$rf" >$r1 || exit 1 ;;
+        (A|R) :>$r1 ;;
+        (P|U) continue ;;
+        esac
+            
+        if [[ $r2_rev ]] ; then
+            r2=$TMPDIR/$f.$r2_rev
+            cvs -q co -p ${r2_rev:+-r $r2_rev} "$rf" >$r2 || exit 1
+            vim -d $r1 $r2
+        elif [[ $st == R ]] ; then
+            vim -d $af $r1
+        else
+            vim -d $r1 $af
+        fi
+    done 3< <(cvs -qn up "$cf")
+done

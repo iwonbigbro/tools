@@ -15,6 +15,7 @@ set formatoptions+=2n
 " Mine
 set autoindent
 set sm
+set textwidth=80
 set shiftwidth=4
 set tabstop=4
 set expandtab
@@ -30,6 +31,7 @@ set modeline
 set pastetoggle=<F11>
 set undolevels=1000
 set dir=~/.vim/tmp//,/tmp//,.
+set number
 
 " For local replace
 nnoremap gr gd[{V%:s/<C-R>///gc<left><left><left>
@@ -77,4 +79,8 @@ if has("autocmd")
         autocmd FileType xml,xslt setlocal tabstop=4 foldcolumn=2 foldmethod=syntax matchpairs+=<:>
         autocmd FileType html   setlocal matchpairs+=<:>
     augroup END
-endif
+
+endif " has(autocmd)
+
+hi ColumnLimit ctermbg=DarkRed ctermfg=Red guibg=DarkRed guifg=Red
+call matchadd('ColumnLimit', '\%<82v.\%>81v', -1)

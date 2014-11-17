@@ -12,6 +12,8 @@ export MAIL_NOTIFY_FILE=$HOME/stage/.mailnotify.nfo
     export USER=${LOGNAME:-$(id -un)}
 }
 
+shopt -s extglob
+
 hash readlink 1>/dev/null 2>&1 || {
     function readlink() {
         local link=$(ls -l $1 | awk '{print $NF}')
@@ -66,35 +68,16 @@ function reattach_screen_session() {
 
 function mychdir() {
     local prog="cd"
-    local -a cdargs=()
+    local cdargs=()
     local dir=
-    local pushback=
-    local pushup=
 
     # ignore command line options
-    while [[ $# -gt 0 ]] ; do
-        case $1 in
-        (-u|--up)
-            pushup=${2//[^0-9]/}
-            shift
-            ;;
-        (-b|--back) 
-            pushback=${2//[^0-9]/}
-            shift
-            ;;
-        (*)
-            if [[ $# -eq 1 ]] ; then
-                dir="$1"
-            else
-                cdargs[${#cdargs[*]}]=$1
-            fi
-            ;;
-        esac
+    while (( $# > 1 )) ; do
+        cdargs[${#cdargs[*]}]=$1
         shift
     done
 
-    [[ ${pushback:-0} -gt 0 ]] && dir="-"
-    [[ ${pushup:-0} -gt 0 ]] && dir=".."
+    dir=$1
 
     if [[ -z "$dir" ]]; then
         pushd "$HOME" >/dev/null
@@ -105,18 +88,13 @@ function mychdir() {
             return 1
             ;;
         (..)
-            pushup=${pushup:-1}
-            while [[ $pushup -gt 1 ]] ; do
-                dir="$dir/.."
-                (( pushup-- ))
-            done
             pushd "$dir" >/dev/null
             ;;
-        (-) 
-            pushback=${pushback:-1}
-            while [[ $pushback -gt 0 ]] ; do
+        (-|-+([0-9])) 
+            local dir_index=${1#-}
+            while (( ${dir_index:-0} > 0 )) ; do
                 popd >/dev/null
-                (( pushback-- ))
+                (( dir_index-- ))
             done
             ;;
         (*)

@@ -156,78 +156,73 @@ function mychdir() {
         __MYSETPROMPT_FS="$(df -TP . | awk '$NF ~ /^\// { print $2 }')"
         __MYSETPROMPT_HOME=$(df -P $HOME | awk '$1 ~ /^\// { print "'$(hostname -s)'" ; exit 0 }')
 
-        mysetprompt
+        export PS1='$(myprompt)'
+        export PS2='> '
     }
     return 0
 }
 
-function mysetprompt() {
-    local pcol pchr dcol pchroot pfs ptim
-    local dir="$PWD"
+function myprompt() {
+    ret=$?
 
-    [[ ${_PROMPTCOLOUR:+PROMPTCOLOR_IS_SET} ]] || {
-        # set colour of output
-        [[ $UID = 0 || ${LOGNAME:-$USER} = "root" ]] && {
-            pchr='#'
-            pcol=$_RED
-        } || {
-            pchr='$'
-            case ${HOSTNAME%%.*} in
-            # Where the home directory is located
-            ($__MYSETPROMPT_HOME)
-                pcol=$_GREEN
-                ;;
+    # set colour of output
+    if [[ $UID == 0 || ${LOGNAME:-$USER} == "root" ]] ; then
+        char='#'
+        color=$_RED
+    else
+        char='$'
+        case ${HOSTNAME%%.*} in
+        # Where the home directory is located
+        ($__MYSETPROMPT_HOME)
+            color=$_GREEN
+            ;;
 
-            # Build machines
-            (${__MYSETPROMP_BUILDMACHINES:-0})
-                pcol=$_BLUE
-                ;;
+        # Build machines
+        (${__MYSETPROMP_BUILDMACHINES:-0})
+            color=$_BLUE
+            ;;
 
-            # DNS Servers
-            (${__MYSETPROMP_DNSSERVERS:-0})
-                pcol=$_BROWN
-                ;;
+        # DNS Servers
+        (${__MYSETPROMP_DNSSERVERS:-0})
+            color=$_BROWN
+            ;;
 
-            # Reserved
-            (NOTSET)
-                pcol=$_PURPLE
-                ;;
+        # Reserved
+        (NOTSET)
+            color=$_PURPLE
+            ;;
 
-            # Anything else
-            (*)
-                pcol=$_CYAN
-                ;;
-            esac
-        }
-        export _PROMPTCOLOUR=$pcol
-        export _PROMPTCHAR=$pchr
-    }
+        # Anything else
+        (*)
+            color=$_CYAN
+            ;;
+        esac
+    fi
+
+    dir="$PWD"
 
     [[ "${dir#${HOME}}" != "${dir}" ]] && {
         dir="~${dir#${HOME}}"
     }
 
-    [[ $SCM_BUILD_CHROOT ]] && {
-        pchroot="\[${_RED}\](chroot)\[${_NORMAL}\]"
-    }
+    printf "$_NORMAL"
+
+    if [[ ! $__MYPROMPT_HIDETIME ]] ; then
+        printf "($(date +%H:%M:%S))"
+    fi
+
+    if [[ $ret != 0 ]] ; then
+        printf "(${_RED}ERR:$ret${_NORMAL})"
+    fi
+
+    printf "${color}${LOGNAME:-$USER}@${HOSTNAME%%.*}:$_NORMAL"
 
     # Remote disks are slow, make them dim.
     case "$__MYSETPROMPT_FS" in
-    (nfs)
-        pfs="\[${_BROWN}\]($__MYSETPROMPT_FS)"
-        ;;
+    (nfs) printf "(${_BROWN}${__MYSETPROMPT_FS}${_NORMAL})" ;;
     esac
 
-    # Comment out to hide the time.
-    [[ $__MYPROMPT_HIDETIME ]] || {
-        ptim="\[$_NORMAL\](\t) "
-    }
-
-    dir="\[${dcol}\]${pfs}${pchroot}\[$_NORMAL\]${dcol:+\\[$dcol\\]}$dir"
-
-    export PS1="$ptim\[${_PROMPTCOLOUR}\]\u@\h:${dir}\[${_NORMAL}\]\n${_PROMPTCHAR:-$} "
-    export PS2="\[${_PROMPTCOLOUR}\]...\[${_NORMAL}\]> "
-
+    printf "${_NORMAL}${dir}${_NORMAL}\n${char} "
     return 0
 }
 

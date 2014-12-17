@@ -9,31 +9,27 @@ function usage() {
 Usage: ${cvs2git_lite_sh##*/} [options] <CVSDIR> <GITDIR>
 Summary:
     This is a light implementation of cvs2git.  The goal of this script is to
-    provide a simple way to import a single checked out branch from CVS, into
+    provide a simple way to import a single branch from a CVS repository, into
     a git repository.  The branch of the git repository is assumed to be
     master, but it is not limited to this.  If you checkout a different branch
     in the git repository before you run this tool, it will blindly commit
     changes to that branch.
 
-    The script operates on a file by file basis, importing all versions of all
-    files, one file and one version at a time.  For example, if you have 18
-    revisions of /somedir/somefile.c, the script will checkout version 1.1 of
-    the file first and iterate over each revision, merging changes with the
-    original commit message.  If you have a branch checked out in your CVS
-    directory, the file revisions will have a base revision that will not be
-    back tracked.  For example, a file might have the revision 1.3.2.14.  This
-    indicates the file was branched from trunk at 1.3 and has subsequently been
-    branched again at 1.3.2 to 1.3.2.1.  Since then, 13 changes have been made
-    to the file.  This script will only merge the 14 revisions on the branch
-    copy and will not back track to 1.3.2, 1.3.1, 1.3, 1.2 and 1.1.
+    The script operates on the remote log, generated from the base of the
+    specified directory.  This means that the caller can control what gets
+    included in each import.  Branches are not mapped or tracked, so this is
+    something you will need to do manually, by first importing HEAD and then
+    branching from head at the appropriate commit.  However, the intention here
+    is to provide some basic simplified CVS importing, which works around
+    problems with importing large and ancient CVS repositories.
 
-    The ultimate goal of this script is to retain change history for a single
-    branch on a subset of a CVS repository, without having to import the whole
-    repository - which is what cvs2git does.  Use this if you want to import
-    some subset of a CVS project and start working on it immediately.
+Future:
+    I may provide additional branch tracking features.  This will involve
+    calculating the git revision or commit checksum that a branch was taken from
+    and subsequently merging branch commits onto that branch.
 
 Options:
-    -? --help                 Display usage and exit.
+    -b --branch <TAG>         Branch or tag label (default: HEAD)
     -d --cvsroot              Specify CVSROOT (default: \$CVSROOT)
     -n --dry-run              Don't change the git repository.
        --author-tx <CMD>      Call command <CMD> to obtain a tansformed author
@@ -109,6 +105,71 @@ function author_tx_ldap() {
 
 declare -A author_tx_map=()
 
+function author_tx() {
+    if [[ $1 ]] ; then
+        local a=${author_tx_map[$1]:-}
+
+        if [[ ! $a ]] ; then
+            a=$($author_tx "$1") || err "Author transform failed"
+            author_tx_map[$1]="$a"
+        fi
+
+        printf "%s\n" "$a"
+    fi
+}
+
+# This is to provide a similar implementation to co -p, but this implementation
+# ensures that the file permissions are retained.
+function cvs_co() {
+    (( $# == 3 )) || err "Invalid checkout request: $*"
+
+    rm -rf $cvstmp
+    mkdir -p $cvstmp
+    (
+        cd $cvstmp &&
+        cvs -q co -r$1 "$cvsdir/$2"
+    )
+    rsync --exclude=CVS -a $cvstmp/$cvsdir/ $3/
+}
+
+function git_commit() {
+    local f r d a l c \
+          author= \
+          date= \
+          comment=
+
+    info "Generating git commit..."
+    while IFS=';' read f r d a s l c ; do
+        if [[ $s == "dead" ]] ; then
+            info " * removing: $gitdir/$f..."
+            info " * staging: $gitdir/$f..."
+            git rm "$gitdir/$f"
+        else
+            info " * fetching: $cvsdir/$f..."
+            cvs_co $r "$f" $gitdir
+
+            info " * staging: $gitdir/$f..."
+            git add $dry_run "$gitdir/$f"
+        fi
+
+        if [[ ! $comment ]] ; then
+            comment=$c
+            date=$d
+            author=$a
+        fi
+    done
+
+    if [[ $comment ]] ; then
+        info " * committing files..."
+        git commit $dry_run \
+            --author="$(author_tx "$author")" \
+            --date="$date" \
+            -m "$comment"
+    else
+        info " * nothing to commit"
+    fi
+}
+
 function get_commit_info() {
     author=
     message=
@@ -161,20 +222,89 @@ function get_commit_info() {
     [[ $author && $date && $message ]] ||
         err "Failed to get commit info"
 
-    if [[ $author_tx ]] ; then
-        local a=${author_tx_map[$author]:-}
+}
 
-        if [[ ! $a ]] ; then
-            a=$($author_tx "$author") || err "Author transform failed"
-            author_tx_map[$author]="$a"
-        fi
+function flatten_log() {
+    local root_re=$CVSROOT_DIR/$cvsdir
+          root_re=${root_re//\//\\\/}
 
-        author=$a
-    fi
+    awk '
+        BEGIN {
+            buf = -1;
+            f = -1;
+        }
+
+        function flush_buf() {
+            ebuf = buf;
+            buf = "";
+
+            if (! ebuf || ebuf == -1) return;
+
+            ebuf = gensub(/^\ */, "", "", ebuf);
+            ebuf = gensub(/[\n ]*$/, "", "", ebuf);
+
+            printf("%s\n", gensub(/;\ +/, ";", "g", ebuf));
+        }
+
+        /^RCS file:/ {
+            f = gensub(/^RCS file:\ *'"$root_re"'\/(.+),v$/, "\\1", "");
+        }
+
+        f == -1 { next; }
+
+        /^====/ {
+            flush_buf();
+            f = -1;
+            buf = -1;
+            next;
+        }
+
+        /^----/ {
+            flush_buf();
+            next;
+        }
+
+        buf == -1 { next; }
+
+        /^revision [0-9.]+/ {
+            buf = f ";" gensub(/^revision ([0-9.]+)/, "\\1", "") ";";
+            next;
+        }
+
+        ! buf { next; }
+
+        /^date:/ {
+            tbuf = gensub(/\ *([;:])\ */, "\\1", "g");
+
+            d = gensub(/^date:\ *([^;]+);.*/, "\\1", "", tbuf);
+            d = gensub(/[\/]/, "-", "g", d);
+            d = gensub(/\ /, "T", "", d);
+            d = gensub(/\ /, "", "g", d);
+
+            a = gensub(/^.*;author:\ *([^;]+);.*/, "\\1", "", tbuf);
+            s = gensub(/^.*;state:\ *([^;]+);.*/, "\\1", "", tbuf);
+
+            if (tbuf ~ /;lines:/) {
+                l = gensub(/^.*lines:\ *([^;]+).*$/, "\\1", "", tbuf);
+            } else {
+                l = "";
+            }
+
+            buf = buf d ";" a ";" s ";" l ";";
+            next;
+        }
+
+        { buf = buf $0 " "; }
+    '
+}
+
+function sort_flog() {
+    sort -k3,7 -t\;
 }
 
 dry_run=
 author_tx=
+branch=HEAD
 
 export LDAP_SEARCH_FILTER=${LDAP_SEARCH_FILTER:-'(|(sAMAccountName=$1))'}
 
@@ -186,6 +316,10 @@ while (( $# > 0 )) ; do
         ;;
     (--author-tx)
         author_tx="$2"
+        shift
+        ;;
+    (-b|--branch)
+        branch=$2
         shift
         ;;
     (-d|--cvsroot)
@@ -209,8 +343,15 @@ if (( $# != 2 )) ; then
     err "Incorrect number of arguments"
 fi
 
-require_dir $1 && cvsdir=$(readlink -f "$1")
+[[ $1 ]] && cvsdir=$1 || err "Missing remote CVS directory"
+
 require_dir $2 && gitdir=$(readlink -f "$2")
+
+if [[ $CVSROOT == "/"* ]] ; then
+    export CVSROOT_DIR=$CVSROOT
+else
+    export CVSROOT_DIR=/${CVSROOT#*/}
+fi
 
 cd $gitdir || err "Failed to change directory: $gitdir"
 
@@ -222,80 +363,38 @@ TMPDIR=$(mktemp -d) || err "Failed to create work directory"
 trap "rm -rf $TMPDIR" EXIT
 export TMPDIR
 
+cvstmp=$TMPDIR/cvs
+mkdir -p $cvstmp
+
 set -eu
+set -o pipefail
 trap 'err "Unhandled error"' ERR
 
 BASH_XTRACEFD=2
-set -x
 exec 1>$gitdir/cvs2git-lite.log 2>&1
+set -x
 
-cvs_ent_tmp=$(mktemp)
-find $cvsdir -type f -path '*/CVS/Entries' -printf "%P\n" >$cvs_ent_tmp
+# RLog impl
+info "Generating flat CVS log..."
+flog=$TMPDIR/flog
+cvs -q rlog -N -r::$branch $cvsdir | flatten_log | sort_flog >$flog
 
-while read cvs_entries ; do
-    cvs_subdir=${cvs_entries%CVS/Entries}
-    cvs_subdir=${cvs_subdir%/}
+last=
+gcommit=$TMPDIR/gcommit
+>$gcommit
 
-    cvs_repo_path=$cvsdir/$cvs_subdir/CVS/Repository
-    cvs_repo=$(cat $cvs_repo_path 2>/dev/null) ||
-        err "Failed to obtain CVS repository path from $cvs_repo_path"
+# Read ahead for timestamp checking.  Identical timestamps  and comments will be
+# merged into the same git repository commmit.
+while read line ; do
+    if [[ $last && $last != $line ]] ; then
+        git_commit <$gcommit
+        >$gcommit
+    fi
+    last=$line
 
-    info "Traversing: ${cvs_subdir:-.}"
-    while IFS="/" read t path rev x ; do
-        [[ $t != "D" ]] || continue
-        [[ $path ]] || continue
+    echo "$line" >>$gcommit
+done <$flog
 
-        base_rev=${rev%.*}
-        cvs_file=${cvs_subdir:+$cvs_subdir/}$path
-        cvs_repofile=$cvs_repo/$path
-        git_file=$gitdir/$cvs_file
-        git_subdir=${git_file%/*}
-
-        revisions=${rev##*.}
-
-        info "  Processing: $cvs_file"
-
-        [[ $revisions ]] || err "Failed to determine file revisions"
-
-        info "    Revisions: $revisions"
-        for (( i = 1 ; i <= ${rev##*.} ; i++ )) ; do
-            co_rev=$base_rev.$i
-
-            info "    Revision: ${base_rev}.$i"
-            get_commit_info $co_rev $cvs_repofile
-
-            info "      Commit Info:"
-            info "        Author:  $author"
-            info "        Date:    $date"
-            info "        Message: ${message:0:60}..."
-
-            # Directory initialisation
-            if [[ ! -d $git_subdir ]] ; then
-                info "      Creating directory: $git_subdir"
-                mkdir -p $git_subdir
-                git add $dry_run $git_subdir
-            fi
-
-            # File initialisation
-            info "      Fetching file..."
-            cvs co -p -r $co_rev $cvs_repofile >$git_file
-
-            info "      Updating file mode..."
-            chmod --reference=$cvsdir/$cvs_file $git_file
-
-            # Record the change in the git repository
-            info "      Adding the file to git repository..."
-            git add $dry_run $git_file
-
-            info "      Committing the file to the git repository..."
-            git commit $dry_run \
-                --author="$author" \
-                --date="$date" \
-                -m "$message" || [[ $dry_run ]]
-
-            info "    Done"
-        done
-        info "  Done"
-    done < $cvsdir/$cvs_entries
-    info "Done"
-done < $cvs_ent_tmp
+if [[ -s $gcommit ]] ; then
+    git_commit <$gcommit
+fi

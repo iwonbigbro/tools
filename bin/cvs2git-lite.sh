@@ -32,22 +32,26 @@ Issues:
     the environment variable CVS_MAX_CONNECTIONS to something less than the
     default: $CVS_MAX_CONNECTIONS.
 
+Notes:
+    This will run a lot faster if you create a local copy of the remote CVS
+    repository before hand.
+
 Future:
     I may provide additional branch tracking features.  This will involve
     calculating the git revision or commit checksum that a branch was taken from
     and subsequently merging branch commits onto that branch.
 
 Options:
-    -r --resume <GITCOMMIT>   Resume from a previous script run.  Provide the
-                              git commit of the last successful CVS merge.  This
-                              can be any number of characters of the sha1sum,
-                              but must not be ambiguous.
-
     -b --branch <TAG>         Branch or tag label (default: HEAD)
 
     -d --cvsroot              Specify CVSROOT (default: \$CVSROOT)
 
     -n --dry-run              Don't change the git repository.
+
+    -r --resume <GITCOMMIT>   Resume from a previous script run.  Provide the
+                              git commit of the last successful CVS merge.  This
+                              can be any number of characters of the sha1sum,
+                              but must not be ambiguous.
 
        --author-tx <CMD>      Call command <CMD> to obtain a tansformed author
                               for each commit.  This is used for instances
@@ -65,6 +69,8 @@ Options:
                               running 'kinit' and providing your LDAP password.
                               Setting LDAP_SEARCH_FILTER will override the
                               default filter: $LDAP_SEARCH_FILTER.
+    
+    --progress                Output progress instead of verbose output.
 
 Copyright (C) 2014 Craig Phillips.  All rights reserved.
 USAGE
@@ -82,6 +88,21 @@ function info_r() {
 
 function info() {
     printf >&3 "%s\n" "$*"
+}
+
+function info_progress() {
+    (( progress_ptr++ )) || true
+
+    local pc=$(( ( $progress_ptr * 100 ) / $progress_max )) \
+          cols=40 \
+          p= s=
+
+    if (( pc > 0 )) ; then
+        p=$(( ( $pc * $cols ) / 100 ))
+        s=$(printf "%${p}s" " ")
+    fi
+
+    printf >&5 "\rImporting: [%-${cols}s] %s %%" "${s//?/#}" "$pc"
 }
 
 function warn() {
@@ -150,15 +171,35 @@ function author_tx() {
 function cvs_co() {
     (( $# == 3 )) || err "Invalid checkout request: $*"
 
-    local cvstmp=$cvstmp/$BASHPID
+    if [[ $cvslocal ]] ; then
+        local attic_ref=
 
-    rm -rf $cvstmp
-    mkdir -p $cvstmp
-    (
-        cd $cvstmp &&
-        cvs -q co -r$1 "$cvsdir/$2"
-    )
-    rsync --exclude=CVS -a $cvstmp/$cvsdir/ $3/
+        if [[ $2 == *"/"* ]] ; then
+            mkdir -p "$3/${2%/*}"
+            attic_ref="$CVSROOT/$cvsdir/${2%/*}/Attic/${2##*/},v"
+        else
+            attic_ref="$CVSROOT/$cvsdir/Attic/$2,v"
+        fi
+
+        cvs -q co -r$1 -p "$cvsdir/$2" >"$3/$2"
+
+        if [[ -f "$CVSROOT/$cvsdir/$2,v" ]] ; then
+            chmod --reference="$CVSROOT/$cvsdir/$2,v" "$3/$2"
+        else
+            chmod --reference="$attic_ref" "$3/$2"
+        fi
+        chmod ug+w "$3/$2"
+    else
+        local cvstmp=$cvstmp/$BASHPID
+
+        rm -rf $cvstmp
+        mkdir -p $cvstmp
+        (
+            cd $cvstmp &&
+            cvs -q co -r$1 "$cvsdir/$2"
+        )
+        rsync --exclude=CVS -a $cvstmp/$cvsdir/ $3/
+    fi
 }
 
 function git_commit() {
@@ -339,6 +380,7 @@ dry_run=
 author_tx=
 branch=HEAD
 resume=
+progress=1
 
 while (( $# > 0 )) ; do
     case $1 in
@@ -349,6 +391,9 @@ while (( $# > 0 )) ; do
     (--author-tx)
         author_tx="$2"
         shift
+        ;;
+    (--progress)
+        progress=1
         ;;
     (-b|--branch)
         branch=$2
@@ -385,8 +430,10 @@ require_dir $2 && gitdir=$(readlink -f "$2")
 
 if [[ $CVSROOT == "/"* ]] ; then
     export CVSROOT_DIR=$CVSROOT
+    cvslocal=1
 else
     export CVSROOT_DIR=/${CVSROOT#*/}
+    cvslocal=
 fi
 
 cd $gitdir || err "Failed to change directory: $gitdir"
@@ -405,7 +452,7 @@ fi
 
 TMPDIR=$(mktemp -d) || err "Failed to create work directory"
 trap "wait ; rm -rf $TMPDIR" EXIT
-trap "warn 'Interrupt'; trap - ERR ; exit 1" INT
+trap "warn ; warn 'Interrupt'; trap - ERR ; exit 1" INT
 export TMPDIR
 
 cvstmp=$TMPDIR/cvs
@@ -415,9 +462,13 @@ set -Eeu
 set -o pipefail
 trap 'err "Unhandled error"' ERR
 
-BASH_XTRACEFD=2
-exec 1>$gitdir/cvs2git-lite.log 2>&1
-set -x
+if [[ ${DEBUG:-0} == 1 ]] ; then
+    BASH_XTRACEFD=2
+    exec 1>$gitdir/cvs2git-lite.log 2>&1 5>/dev/null
+    set -x
+else
+    exec 1>/dev/null 2>&1 5>&1
+fi
 
 resume_hash=
 
@@ -446,6 +497,13 @@ info "Generating flat CVS log..."
 flog=$TMPDIR/flog
 cvs -q rlog -N -r::$branch $cvsdir | flatten_log | sort_flog >$flog
 
+if [[ $progress ]] ; then
+    info "Calculating progess..."
+    progress_max=$(wc -l <$flog)
+    progress_ptr=0
+    exec 5>&3 3>&1
+fi
+
 last_chash=
 gcommit=$TMPDIR/gcommit
 >$gcommit
@@ -462,6 +520,8 @@ fi
 # merged into the same git repository commmit.
 while IFS=';' read $LOG_VARS ; do
     chash=$(commit_hash "$d$c")
+    
+    info_progress
 
     if [[ $resume_hash ]] ; then
         if [[ $resume_hash == $last_chash && $resume_hash != $chash ]] ; then

@@ -108,7 +108,7 @@ function author_tx_ldap() {
           filter=${LDAP_SEARCH_FILTER} \
           ldaptmp=$TMPDIR/author_tx_ldap.out
 
-    filter=${filter//\$1/$1}
+    eval "filter=\"$filter\""
 
     ldapsearch "$filter" name mail >$ldaptmp
 

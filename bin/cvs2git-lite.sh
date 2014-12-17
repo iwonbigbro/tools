@@ -38,9 +38,17 @@ Future:
     and subsequently merging branch commits onto that branch.
 
 Options:
+    -r --resume <GITCOMMIT>   Resume from a previous script run.  Provide the
+                              git commit of the last successful CVS merge.  This
+                              can be any number of characters of the sha1sum,
+                              but must not be ambiguous.
+
     -b --branch <TAG>         Branch or tag label (default: HEAD)
+
     -d --cvsroot              Specify CVSROOT (default: \$CVSROOT)
+
     -n --dry-run              Don't change the git repository.
+
        --author-tx <CMD>      Call command <CMD> to obtain a tansformed author
                               for each commit.  This is used for instances
                               where CVS authors require mapping to git authors
@@ -63,6 +71,14 @@ USAGE
 }
 
 exec 3>&1 4>&2
+
+function info_s() {
+    printf >&3 "%s" "$*"
+}
+
+function info_r() {
+    printf >&3 "\r%80s\r%s" " " "$*"
+}
 
 function info() {
     printf >&3 "%s\n" "$*"
@@ -316,12 +332,13 @@ function sort_flog() {
 }
 
 function commit_hash() {
-    sha1sum <<<"$*" | cut -c -7
+    sha1sum <<<"$*" | cut -c -16
 }
 
 dry_run=
 author_tx=
 branch=HEAD
+resume=
 
 while (( $# > 0 )) ; do
     case $1 in
@@ -343,6 +360,10 @@ while (( $# > 0 )) ; do
         ;;
     (-n|--dry-run)
         dry_run="-n"
+        ;;
+    (-r|--resume)
+        resume=$2
+        shift
         ;;
     (-*)
         err "Invalid option: $1"
@@ -370,8 +391,16 @@ fi
 
 cd $gitdir || err "Failed to change directory: $gitdir"
 
-if [[ $(cd $gitdir && git status -s) ]] ; then
-    err "Git repository needs to be reset"
+if [[ ! $resume && $(git status -s $gitdir) ]] ; then
+    warn "Git repository needs to be reset and garbage collected, where"
+    warn "<GITCOMMIT> is the commit ref to reset back to"
+    warn "  git log $gitdir"
+    warn "  git reset --hard <GITCOMMIT> $gitdir"
+    warn "  git reflog expire --expire-unreachable=now --all $gitdir"
+    warn "  git gc --prune=now $gitdir"
+    warn "If you are resuming from a previous import, specify"
+    warn "  --resume <GITCOMMIT>"
+    err "to resume."
 fi
 
 TMPDIR=$(mktemp -d) || err "Failed to create work directory"
@@ -390,6 +419,28 @@ BASH_XTRACEFD=2
 exec 1>$gitdir/cvs2git-lite.log 2>&1
 set -x
 
+resume_hash=
+
+if [[ $resume ]] ; then
+    info "Locating resume point..."
+    git log --pretty="format:%at %s %b%n" \
+        "$resume^..$resume" "$gitdir" >$TMPDIR/resume
+
+    while read ts message ; do
+        if [[ $resume_hash ]] ; then
+            err "Ambiguous commit: $resume"
+        fi
+
+        resume_hash=$(commit_hash "$(date -d @$ts +%Y-%m-%dT%H:%M:%S)$message")
+
+        [[ $resume_hash ]] || err "Failed to generate commit hash"
+    done < $TMPDIR/resume
+
+    [[ $resume_hash ]] || err "Failed locate resume point: $resume"
+
+    info " * resume hash: $resume_hash"
+fi
+
 # RLog impl
 info "Generating flat CVS log..."
 flog=$TMPDIR/flog
@@ -402,16 +453,33 @@ gcommit=$TMPDIR/gcommit
 LOG_VARS="f r d a s l c"
 LOG_VAR_LAST=${LOG_VARS##* }
 
+if [[ $resume_hash ]] ; then
+    info "Fast forwarding to resume hash"
+    info_s ""
+fi
+
 # Read ahead for timestamp checking.  Identical timestamps  and comments will be
 # merged into the same git repository commmit.
 while IFS=';' read $LOG_VARS ; do
     chash=$(commit_hash "$d$c")
 
-    if [[ $last_chash && $last_chash != $chash ]] ; then
+    if [[ $resume_hash ]] ; then
+        if [[ $resume_hash == $last_chash && $resume_hash != $chash ]] ; then
+            info_r " * resume from:" ; info ""
+            info "   ** date: $d"
+            info "   ** message: ${c:0:60}..."
+            resume_hash=
+        else
+            info_r " * $chash"
+            last_chash=$chash
+            continue
+        fi
+    fi
+
+    if [[ -s $gcommit && $last_chash && $last_chash != $chash ]] ; then
         git_commit <$gcommit
         >$gcommit
     fi
-
     last_chash=$chash
 
     for v in $LOG_VARS ; do
@@ -423,7 +491,11 @@ while IFS=';' read $LOG_VARS ; do
             printf ";"
         fi
     done >>$gcommit
-done <$flog
+done < $flog
+
+if [[ $resume_hash ]] ; then
+    err "Failed to locate resume hash: $resume_hash"
+fi
 
 if [[ -s $gcommit ]] ; then
     git_commit <$gcommit

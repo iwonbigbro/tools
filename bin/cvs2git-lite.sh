@@ -3,6 +3,10 @@
 # Copyright (C) 2014 Craig Phillips.  All rights reserved.
 
 cvs2git_lite_sh=$(readlink -f "$BASH_SOURCE")
+cvs2git_lite_pid=$BASHPID
+
+export LDAP_SEARCH_FILTER=${LDAP_SEARCH_FILTER:-'(|(sAMAccountName=$1))'}
+export CVS_MAX_CONNECTIONS=${CVS_MAX_CONNECTIONS:-8}
 
 function usage() {
     cat <<USAGE
@@ -22,6 +26,11 @@ Summary:
     branching from head at the appropriate commit.  However, the intention here
     is to provide some basic simplified CVS importing, which works around
     problems with importing large and ancient CVS repositories.
+
+Issues:
+    If you get cvs errors, it might be due to concurrent connections.  Set
+    the environment variable CVS_MAX_CONNECTIONS to something less than the
+    default: $CVS_MAX_CONNECTIONS.
 
 Future:
     I may provide additional branch tracking features.  This will involve
@@ -65,7 +74,7 @@ function warn() {
 
 function err() {
     warn "$*"
-    if [[ -s $gitdir/cvs2git-lite.log ]] ; then
+    if [[ $BASHPID == $cvs2git_lite_pid && -s $gitdir/cvs2git-lite.log ]] ; then
         warn "For details, see $gitdir/cvs2git-lite.log"
     fi
     exit 1
@@ -110,7 +119,9 @@ function author_tx() {
         local a=${author_tx_map[$1]:-}
 
         if [[ ! $a ]] ; then
-            a=$($author_tx "$1") || err "Author transform failed"
+            a=$($author_tx "$1") && [[ "$a" ]] ||
+                err "Author transform failed, try running kinit"
+
             author_tx_map[$1]="$a"
         fi
 
@@ -123,6 +134,8 @@ function author_tx() {
 function cvs_co() {
     (( $# == 3 )) || err "Invalid checkout request: $*"
 
+    local cvstmp=$cvstmp/$BASHPID
+
     rm -rf $cvstmp
     mkdir -p $cvstmp
     (
@@ -133,95 +146,94 @@ function cvs_co() {
 }
 
 function git_commit() {
-    local f r d a l c \
+    local $LOG_VARS \
           author= \
           date= \
-          comment=
+          comment= \
+          pid= \
+          pids=() \
+          wait_pids=0 \
+          gf= \
+          commit= \
+          unstaged=()
 
     info "Generating git commit..."
-    while IFS=';' read f r d a s l c ; do
-        if [[ $s == "dead" ]] ; then
-            info " * removing: $gitdir/$f..."
-            info " * staging: $gitdir/$f..."
-            git rm "$gitdir/$f"
-        else
-            info " * fetching: $cvsdir/$f..."
-            cvs_co $r "$f" $gitdir
+    rm -rf $cvstmp
+    mkdir -p $cvstmp
 
-            info " * staging: $gitdir/$f..."
-            git add $dry_run "$gitdir/$f"
-        fi
+    while IFS=';' read $LOG_VARS ; do
+        gf=$gitdir/$f
 
         if [[ ! $comment ]] ; then
             comment=$c
             date=$d
-            author=$a
+            author=$(author_tx "$a")
+
+            info " * author: $author (cvs: $a)"
+            info " * date: $date"
+            info " * comment: ${comment:0:60}..."
+            commit=1
+        fi
+
+        if [[ $s == "dead" ]] ; then
+            info " * removing: $gf"
+            info " * staging: $gf"
+            git rm "$gf"
+        else
+            info " * fetching: $cvsdir/$f"
+            info "   ** revision: $r"
+            (
+                exec 1>$cvstmp/$BASHPID.out 2>&1
+                set -eux +E
+
+                trap - ERR
+
+                cvs_co $r "$f" "$gitdir" 
+
+                touch $cvstmp/$BASHPID.ok
+            ) &
+            pids+=( $! )
+            unstaged+=( "$gf" )
+            (( wait_pids++ )) || true
+
+            if (( wait_pids > CVS_MAX_CONNECTIONS )) ; then
+                info " * waiting for CVS processes..."
+                wait
+                wait_pids=0
+            fi
         fi
     done
 
-    if [[ $comment ]] ; then
+    if (( wait_pids > 0 )) ; then
+        info " * waiting for CVS processes..."
+        wait
+    fi
+
+    if [[ ${pids:-} ]] ; then
+        for pid in "${pids[@]}" ; do
+            cat $cvstmp/$pid.out
+            if [[ ! -e $cvstmp/$pid.ok ]] ; then
+                err "Process $pid failed"
+            fi
+        done
+    fi
+
+    if [[ ${unstaged:-} ]] ; then
+        for gf in "${unstaged[@]}" ; do
+            info " * staging: $gf"
+            git add $dry_run "$gf"
+        done
+    fi
+
+    if [[ $commit ]] ; then
         info " * committing files..."
         git commit $dry_run \
-            --author="$(author_tx "$author")" \
+            --author="$author" \
             --date="$date" \
             -m "$comment"
     else
         info " * nothing to commit"
     fi
-}
-
-function get_commit_info() {
-    author=
-    message=
-    date=
-
-    local first= \
-          last= \
-          logtmp=$TMPDIR/get_commit_info.out
-
-    cvs rlog -N -r$1 "$2" >$logtmp
-
-    while read line ; do
-        if [[ ! $first ]] ; then
-            if [[ $line =~ total\ revisions:\ ([0-9]+)\; ]] ; then
-                if [[ $revisions != ${BASH_REMATCH[1]} ]] ; then
-                    revisions=${BASH_REMATCH[1]}
-                    info "      Found new revisions on the server: $revisions"
-                fi
-            fi
-
-            if [[ $line == "--------"* ]] ; then
-                first=1
-            fi
-            continue
-        fi
-
-        if [[ $last ]] ; then
-            if [[ $line == "========"* ]] ; then
-                break
-            fi
-            message+="$line "
-        else
-            if [[ $line =~ date:\ ([0-9:/ ]+)\; ]] ; then
-                date=${BASH_REMATCH[1]}
-                date=${date//\//-}
-                date=${date/ /T}
-
-                if [[ ! $date =~ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]] ; then
-                    err "Failed to generate a sensible date: $date"
-                fi
-            fi
-
-            if [[ $line =~ author:\ ([^\;]+)\; ]] ; then
-                author=${BASH_REMATCH[1]}
-                last=1
-            fi
-        fi
-    done < $logtmp
-
-    [[ $author && $date && $message ]] ||
-        err "Failed to get commit info"
-
 }
 
 function flatten_log() {
@@ -248,6 +260,7 @@ function flatten_log() {
 
         /^RCS file:/ {
             f = gensub(/^RCS file:\ *'"$root_re"'\/(.+),v$/, "\\1", "");
+            f = gensub(/\<Attic\//, "", "", f);
         }
 
         f == -1 { next; }
@@ -302,11 +315,13 @@ function sort_flog() {
     sort -k3,7 -t\;
 }
 
+function commit_hash() {
+    sha1sum <<<"$*" | cut -c -7
+}
+
 dry_run=
 author_tx=
 branch=HEAD
-
-export LDAP_SEARCH_FILTER=${LDAP_SEARCH_FILTER:-'(|(sAMAccountName=$1))'}
 
 while (( $# > 0 )) ; do
     case $1 in
@@ -360,13 +375,14 @@ if [[ $(cd $gitdir && git status -s) ]] ; then
 fi
 
 TMPDIR=$(mktemp -d) || err "Failed to create work directory"
-trap "rm -rf $TMPDIR" EXIT
+trap "wait ; rm -rf $TMPDIR" EXIT
+trap "warn 'Interrupt'; trap - ERR ; exit 1" INT
 export TMPDIR
 
 cvstmp=$TMPDIR/cvs
 mkdir -p $cvstmp
 
-set -eu
+set -Eeu
 set -o pipefail
 trap 'err "Unhandled error"' ERR
 
@@ -379,20 +395,34 @@ info "Generating flat CVS log..."
 flog=$TMPDIR/flog
 cvs -q rlog -N -r::$branch $cvsdir | flatten_log | sort_flog >$flog
 
-last=
+last_chash=
 gcommit=$TMPDIR/gcommit
 >$gcommit
 
+LOG_VARS="f r d a s l c"
+LOG_VAR_LAST=${LOG_VARS##* }
+
 # Read ahead for timestamp checking.  Identical timestamps  and comments will be
 # merged into the same git repository commmit.
-while read line ; do
-    if [[ $last && $last != $line ]] ; then
+while IFS=';' read $LOG_VARS ; do
+    chash=$(commit_hash "$d$c")
+
+    if [[ $last_chash && $last_chash != $chash ]] ; then
         git_commit <$gcommit
         >$gcommit
     fi
-    last=$line
 
-    echo "$line" >>$gcommit
+    last_chash=$chash
+
+    for v in $LOG_VARS ; do
+        printf "%s" "${!v}"
+
+        if [[ $v == $LOG_VAR_LAST ]] ; then
+            printf "\n"
+        else
+            printf ";"
+        fi
+    done >>$gcommit
 done <$flog
 
 if [[ -s $gcommit ]] ; then

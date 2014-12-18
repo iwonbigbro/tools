@@ -110,7 +110,11 @@ function info_progress() {
         s=$(printf "%${p}s" " ")
     fi
 
-    printf >&5 "\rImporting: [%-${cols}s] %s %%" "${s//?/#}" "$pc"
+    if [[ $resume && $resume_hash ]] ; then
+        printf >&5 "\r Skipping: [%-${cols}s] %3s %%" "${s//?/#}" "$pc"
+    else
+        printf >&5 "\rImporting: [%-${cols}s] %3s %%" "${s//?/#}" "$pc"
+    fi
 }
 
 function warn() {
@@ -568,17 +572,17 @@ while IFS=';' read $LOG_VARS ; do
     done >>$gcommit
 done < $flog
 
-if [[ $resume_hash ]] ; then
-    info
-    info "Repositories are already in sync"
-    exit 0
-fi
-
 if [[ -s $gcommit ]] ; then
     git_commit <$gcommit
 fi
 
 info_progress "end"
+
+if [[ $resume_hash ]] ; then
+    info
+    info "Repositories are already in sync"
+    exit 0
+fi
 
 info "Repositories synchronised:"
 info " * commits: $gcommit_count"

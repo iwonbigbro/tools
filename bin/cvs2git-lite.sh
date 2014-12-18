@@ -91,6 +91,13 @@ function info() {
 }
 
 function info_progress() {
+    [[ $progress ]] || return
+
+    if [[ ${1:-} == "end" ]] ; then
+        printf "\n" >&5
+        return
+    fi
+
     (( progress_ptr++ )) || true
 
     local pc=$(( ( $progress_ptr * 100 ) / $progress_max )) \
@@ -380,7 +387,7 @@ dry_run=
 author_tx=
 branch=HEAD
 resume=
-progress=1
+progress=
 
 while (( $# > 0 )) ; do
     case $1 in
@@ -560,3 +567,5 @@ fi
 if [[ -s $gcommit ]] ; then
     git_commit <$gcommit
 fi
+
+info_progress "end"

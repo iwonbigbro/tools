@@ -91,11 +91,12 @@ function info() {
 }
 
 function info_progress() {
-    [[ $progress ]] || return
+    [[ $progress ]] || return 0
 
     if [[ ${1:-} == "end" ]] ; then
         printf "\n" >&5
-        return
+        exec 3>&5 5>&1
+        return 0
     fi
 
     (( progress_ptr++ )) || true
@@ -228,6 +229,8 @@ function git_commit() {
     while IFS=';' read $LOG_VARS ; do
         gf=$gitdir/$f
 
+        (( gcommit_changes++ )) || true
+
         if [[ ! $comment ]] ; then
             comment=$c
             date=$d
@@ -295,6 +298,8 @@ function git_commit() {
             --author="$author" \
             --date="$date" \
             -m "$comment"
+
+        (( gcommit_count++ )) || true
     else
         info " * nothing to commit"
     fi
@@ -515,6 +520,9 @@ last_chash=
 gcommit=$TMPDIR/gcommit
 >$gcommit
 
+gcommmit_count=0
+gcommmit_changes=0
+
 LOG_VARS="f r d a s l c"
 LOG_VAR_LAST=${LOG_VARS##* }
 
@@ -561,7 +569,9 @@ while IFS=';' read $LOG_VARS ; do
 done < $flog
 
 if [[ $resume_hash ]] ; then
-    err "Failed to locate resume hash: $resume_hash"
+    info
+    info "Repositories are already in sync"
+    exit 0
 fi
 
 if [[ -s $gcommit ]] ; then
@@ -569,3 +579,7 @@ if [[ -s $gcommit ]] ; then
 fi
 
 info_progress "end"
+
+info "Repositories synchronised:"
+info " * commits: $gcommit_count"
+info " * changes: $gcommit_changes"

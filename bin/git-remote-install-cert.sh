@@ -53,6 +53,9 @@ while (( $# > 0 )) ; do
         usage
         exit 0
         ;;
+    (*)
+        break
+        ;;
     esac
     shift
 done

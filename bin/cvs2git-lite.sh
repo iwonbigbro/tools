@@ -524,8 +524,8 @@ last_chash=
 gcommit=$TMPDIR/gcommit
 >$gcommit
 
-gcommmit_count=0
-gcommmit_changes=0
+gcommit_count=0
+gcommit_changes=0
 
 LOG_VARS="f r d a s l c"
 LOG_VAR_LAST=${LOG_VARS##* }

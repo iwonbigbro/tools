@@ -54,6 +54,7 @@ while (( $# > 0 )) ; do
         exit 0
         ;;
     esac
+    shift
 done
 
 name=${1:-origin}

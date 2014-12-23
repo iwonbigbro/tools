@@ -1,0 +1,34 @@
+#!/bin/bash
+
+# Copyright (C) 2014 Craig Phillips.  All rights reserved.
+
+if [[ $1 ]] ; then
+cat <<USAGE
+Usage:
+    diff -U3 file1 file2 | ${0##*/}
+    git diff HEAD^ | ${0##*/}
+    cvs diff -U3 | ${0##*/}
+    svn diff -U3 | ${0##*/}
+USAGE
+    exit 1
+fi
+
+function rec() {
+    [[ $1 == +(+|-) ]] || rec "+" "$2"
+    printf >>$tmpdir/${1//[^+-]/-} "%s\n" "$2"
+}
+
+set -eu
+shopt -s extglob
+
+exec 3<&0 0</proc/$PPID/fd/0
+
+tmpdir=$(mktemp -d)
+
+trap "stty $(stty -g); rm -rf $tmpdir" EXIT
+
+while IFS=$'\n' read -u 3 line ; do
+    rec "${line:0:1}" "$line"
+done
+
+vimdiff $tmpdir/*

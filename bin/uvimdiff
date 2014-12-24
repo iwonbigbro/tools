@@ -27,7 +27,7 @@ tmpdir=$(mktemp -d)
 
 trap "stty $(stty -g); rm -rf $tmpdir" EXIT
 
-while IFS=$'\n' read -u 3 line ; do
+while IFS=$'\n' read -ru 3 line ; do
     rec "${line:0:1}" "$line"
 done
 

@@ -16,6 +16,23 @@ Summary:
     This script runs over each file known to the Git repository and sets the
     modification time to the author commit time of each file.
 
+    Any locally modified files are skipped.
+
+Output:
+    Status messages are output associated with every file, which are two
+    characters like git statuses:
+
+         -  /path/to/file          File is being processed.
+         M  /path/to/file          File is locally modified.
+         R  /path/to/file          File was locally removed.
+         T  /path/to/file          Timestamp was behind and has been updated.
+         t  /path/to/file          Timestamp was ahead and has been updated.
+        ER  /path/to/file          An error occurred.
+
+    M and R statues are read from git-status and are provided as an example.  If
+    git-status returns any status code for any given file, the file is skipped
+    and the Git status is output instead.
+
 Options:
     -C --chdir <PATH>          Change directory before running.
     -v --verbose               Set verbose output.
@@ -42,7 +59,7 @@ while (( $# > 0 )) ; do
         exit 0
         ;;
     (-C|--chdir)
-        cd "$2"
+        cd "$2" || exit 1
         shift
         ;;
     (-v|--verbose)
@@ -79,7 +96,7 @@ git ls-files | while read f ; do
             fi
         fi
     else
-        stat=" D"
+        stat=" R"
     fi
 
     printf >&5 "\r%2s  %s\n" "${stat:-ER}" "$f"

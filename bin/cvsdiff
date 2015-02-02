@@ -58,7 +58,7 @@ for cf in "$@" ; do
         case $st in
         (C|M) cvs -q co -p ${r1_rev:+-r $r1_rev} "$rf" >$r1 || exit 1 ;;
         (A|R) :>$r1 ;;
-        (P|U) continue ;;
+        (P|U|?) continue ;;
         esac
             
         if [[ $r2_rev ]] ; then

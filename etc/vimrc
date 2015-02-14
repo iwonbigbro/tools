@@ -1,3 +1,7 @@
+execute pathogen#infect()
+syntax on
+filetype plugin indent on
+
 " From bwhittak
 set showmatch
 set mouse=nvc
@@ -61,10 +65,6 @@ if exists('+spell')
     hi SpellBad term=reverse ctermfg=gray ctermbg=1 gui=reverse guifg=gray guisp=Red
     hi SpellCap term=reverse ctermfg=gray ctermbg=4 gui=reverse guisp=Blue
 endif
-
-filetype on
-filetype plugin on
-syntax on
 
 if has("autocmd")
     au BufReadPost * if line("'\"") > 0 && line("'\"") <= line("$")

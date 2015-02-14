@@ -17,9 +17,9 @@ set laststatus=2
 set formatoptions+=2n
 
 " Mine
+set t_Co=256
 set autoindent
 set sm
-set textwidth=80
 set shiftwidth=4
 set tabstop=4
 set expandtab
@@ -84,3 +84,14 @@ endif " has(autocmd)
 
 hi ColumnLimit ctermbg=DarkRed ctermfg=Red guibg=DarkRed guifg=Red
 call matchadd('ColumnLimit', '\%<82v.\%>81v', -1)
+
+if &diff
+    if has("autocmd")
+        call system('screen -X layout save diffview_prev')
+        call system('screen -X layout new diffview')
+        call system('screen -X select ' . $WINDOW)
+        autocmd!
+        autocmd VimLeave * call system('screen -X layout select diffview_prev')
+        autocmd VimLeave * call system('screen -X layout remove diffview')
+    endif
+endif

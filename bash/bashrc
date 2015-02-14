@@ -2,11 +2,22 @@
 
 if [[ $0 != $BASH_SOURCE ]] ; then
 
-#exec 2> >(tee /tmp/stderr)
-#set -x
-#echo PATH=$PATH
+export PATH=$HOME/bin:$PATH
+export MANPATH=$HOME/share/man:$MANPATH
 
-#exec 3>&2
+if [[ ! $STY && -t 0 ]] ; then
+    for f in /tmp/uscreens/S-$USER/* ; do
+        if ! fuser $f >/dev/null ; then
+            screen -r ${f##*/}
+            exit 0
+        fi
+    done
+
+    if screen ; then
+        exit 0
+    fi
+fi
+
 exec 3>~/.bashrc.log
 BASH_XTRACEFD=3
 set -x
@@ -69,21 +80,14 @@ if [[ -t 0 ]] ; then
     fi
 
     if [[ -r $TOOLSDIR && -x $TOOLSDIR ]]; then
-        export MYUSR=$HOME/usr
-
         [[ $PWD = $HOME && -f $MYCHDIRCWD ]] && CHDIR="$(cat $MYCHDIRCWD)"
         [[ ! -d "$CHDIR" ]] && unset CHDIR
 
+        MYCHDIR_PID=$BASHPID
         mychdir "${CHDIR:-${PWD}}" 1>&3
 
-        # screen me up scotty
-        if [[ ${SCREEN_SESSION_ENABLED:-0} -eq 1 ]]; then
-            echo >&3 $(date) Reattaching screen session
-            reattach_screen_session
-        fi
-
-        if [[ "$TERM" = "xterm" ]]; then
-            export PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND;} myprompt_command"
+        if [[ "$TERM" = "xterm"* ]]; then
+            PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND;} myprompt_command"
         fi
 
         if [[ $UID -ne 0 ]]; then
@@ -98,6 +102,11 @@ if [[ -t 0 ]] ; then
                 fi
             fi
         fi
+    fi
+
+    if (( $(ls -1 2>/dev/null /tmp/uscreens/S-$USER | wc -l) > 1 )) ; then
+        echo Other screen sessions:
+        printf "    %s\n" $(\cd /tmp/uscreens/S-$USER && echo !($STY))
     fi
 fi
 

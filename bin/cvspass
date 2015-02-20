@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# Copyright (C) 2015 Craig Phillips.  All rights reserved.
+
+set -eu
+shopt -s extglob
+
+cvspass_sh=$(readlink -f "$BASH_SOURCE")
+
+declare -rx DMAP="!\"%&'()*+,-./0123456789:;<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
+declare -rx EMAP="x5mHlF@LCtJDWo4Kw1\"RQ_ApVvnzi9S+.f(Y&g-2*{[#}76B|~;/\Gs8yuhedEIc?^]'%=0:q Z,b<3!a>"
+
+function warn() {
+    echo >&2 "${cvspass_sh##*/}: $*"
+}
+
+function err() {
+    warn "$@"
+    exit 1
+}
+
+function usage() {
+    cat <<USAGE
+Usage: ${cvspass_sh##*/} (decode|encode)
+Summary:
+    Encodes / decodes CVS passwords using the CVS password encryption
+    algorithm. See the documentation on CVS password scrambling:
+    
+        http://www.cvsnt.org/cvsclient/Password-scrambling.html
+
+    As the documentation suggests, password encryption used by CVS is
+    weak and is only meant to prevent inadvertent compromise.  This means
+    CVS passfiles should not be stored on shared machines that are
+    in locations accessible to other users.  Use UNIX file permissions to
+    prevent users from gaining read access to your CVS passfile.
+
+Arguments:
+    decode          Will read an encoded password from standard input and
+                    output the decoded representation on standard output.
+
+    encode          Will read an decoded password from standard input and
+                    output the encoded representation on standard output.
+USAGE
+}
+
+function transcode() {
+    local i j c
+
+    for (( i = 0 ; i < ${#1} ; i++ )) ; do
+        c=${1:$i:1}
+
+        for (( j = 0 ; j < ${#2} ; j++ )) ; do
+            if [[ "$c" == "${2:$j:1}" ]] ; then
+                printf "%s" "${3:$j:1}"
+                break
+            fi
+        done
+    done
+}
+
+function getpasswd() {
+    if [[ -t 0 ]] ; then
+        printf >&2 "Enter password: "
+    fi
+
+    read -s in
+    
+    if [[ -t 0 ]] ; then
+        echo >&2
+    fi
+}
+
+function decode() {
+    getpasswd
+
+    if [[ $in != "A"* ]] ; then
+        err "Invalid password encoding"
+    fi
+
+    out=$(transcode "${in:1}" "$EMAP" "$DMAP")
+    printf "%s\n" "$out"
+}
+
+function encode() {
+    getpasswd
+
+    out=$(transcode "$in" "$DMAP" "$EMAP")
+    printf "A%s\n" "$out"
+}
+
+if [[ ! ${1:-} ]] ; then
+    warn "No command specified"
+    usage
+    exit 1
+fi
+
+if [[ $1 != +(encode|decode) ]] ; then
+    warn "Invalid command: $1"
+    usage
+    exit 1
+fi
+
+$1

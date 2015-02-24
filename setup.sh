@@ -49,16 +49,16 @@ function setup_vim() {
 
     install -vm 0640 ${setup_sh%/*}/etc/vimrc $HOME/.vimrc
 
-    git clone git://github.com/tpope/vim-sensible.git \
+    git clone https://github.com/tpope/vim-sensible.git \
         $HOME/.vim/bundle/vim-sensible
 
-    git clone git@github.com:itchyny/lightline.vim.git \
+    git clone https://github.com/itchyny/lightline.vim.git \
         $HOME/.vim/bundle/lightline.vim
 
-    git clone git@github.com:vim-scripts/minibufexplorerpp.git \
+    git clone https://github.com/vim-scripts/minibufexplorerpp.git \
         $HOME/.vim/bundle/minibufexplorerpp
 
-    git clone git@github.com:w0ng/vim-hybrid.git \
+    git clone https://github.com/w0ng/vim-hybrid.git \
         $HOME/.vim/bundle/vim-hybrid
 
     git clone https://github.com/scrooloose/syntastic.git \
@@ -76,6 +76,10 @@ function setup_bash() {
 
     rm -f $HOME/.bashrc
     ln -s ${setup_sh%/*}/bash/bashrc $HOME/.bashrc
+
+    if [[ ! -f $HOME/.bash_profile ]] ; then
+        echo '. $HOME/.bashrc' >$HOME/.bash_profile
+    fi
 }
 
 function setup_screen() {

@@ -45,7 +45,8 @@ function setup_vim() {
 
     mkdir -p $HOME/.vim/autoload $HOME/.vim/bundle
     wget -O $HOME/.vim/autoload/pathogen.vim \
-        "https://tpo.pe/pathogen.vim"
+    	--no-check-certificate \
+    	"https://raw.githubusercontent.com/tpope/vim-pathogen/master/autoload/pathogen.vim"
 
     install -vm 0640 ${setup_sh%/*}/etc/vimrc $HOME/.vimrc
 

@@ -6,6 +6,8 @@ if [[ ! $STY && -t 0 ]] ; then
     exec 3>~/.bashrc.log
     BASH_XTRACEFD=3
     set -x
+else
+    exec 3>/dev/null
 fi
 
 if [[ $0 != $BASH_SOURCE ]] ; then
@@ -47,7 +49,7 @@ if [[ ! $STY && -t 0 ]] ; then
 
         set +x
         unset BASH_XTRACEFD
-        exec 3>&-
+        exec 3>/dev/null
 
         if screen ${screen:+-r $screen} ; then
             exit 0

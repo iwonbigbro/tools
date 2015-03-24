@@ -1037,52 +1037,21 @@ function sudo() {
 #
 # Find functions
 #
-function findf() {
-    find "$@" -type f # -print
-}
-
-function cfindf() {
-    local -a a
-    while [[ $# -gt 0 && T$1 != T-*  && $1 != [\(!] ]]; do
-	a[${#a[@]}]=$1; shift; done
-    [[ ${#a[@]} -gt 0 ]] || a=.
-    find "${a[@]}" ! \( -type d \( -name CVS -o -name .svn \) -prune \) -type f ${1+\(} "$@" ${1+\)}
-}
-
 function cfind() {
     local -a a
-    while [[ $# -gt 0 && T$1 != T-*  && $1 != [\(!] ]]; do
-	a[${#a[@]}]=$1; shift; done
-    [[ ${#a[@]} -gt 0 ]] || a=.
-    find "${a[@]}" ! \( -type d \( -name CVS -o -name .svn \) -prune \) ${1+\(} "$@" ${1+\)}
-}
 
-function sfindf() {
-    local -a a
-    while [[ $# -gt 0 && T$1 != T-*  && $1 != [\(!] ]]; do
-	a[${#a[@]}]=$1; shift; done
-    [[ ${#a[@]} -gt 0 ]] || a=.
-    find "${a[@]}" ! \( -type d -name .svn -prune \) -type f ${1+\(} "$@" ${1+\)}
-}
-
-function sfind() {
-    local -a a
-    while [[ $# -gt 0 && T$1 != T-*  && $1 != [\(!] ]]; do
-	a[${#a[@]}]=$1; shift; done
-    [[ ${#a[@]} -gt 0 ]] || a=.
-    find "${a[@]}" ! \( -type d -name .svn -prune \) ${1+\(} "$@" ${1+\)}
-}
-
-function svnhelp() { svn help "$@" | less; }
-
-function ignorecvs() { 
-    local i f d;
-    for i in "$@"; do
-        f=${i##*/};
-        d=${i%$f};
-        echo $f >>$d.cvsignore;
-        cvs add $d.cvsignore;
+    while [[ $# -gt 0 && T$1 != T-*  && $1 != [\(!] ]] ; do
+        a+=( $1 )
+        shift
     done
+
+    find "${a[@]}" ! \( \
+        -type d \( \
+            -name .git -o \
+            -name CVS -o \
+            -name .svn \
+        \) -prune \
+    \) ${1+\(} "$@" ${1+\)}
 }
 
 alias sgrep='grep --exclude="*.svn-base" --exclude-dir=".svn"'

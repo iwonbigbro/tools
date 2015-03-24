@@ -1,19 +1,59 @@
 #!/bin/bash
 
+PS4='+ [$BASHPID]: '
+
+if [[ ! $STY && -t 0 ]] ; then
+    exec 3>~/.bashrc.log
+    BASH_XTRACEFD=3
+    set -x
+fi
+
 if [[ $0 != $BASH_SOURCE ]] ; then
 
 export PATH=$HOME/bin:$PATH
 export MANPATH=$HOME/share/man:$MANPATH
 
 if [[ ! $STY && -t 0 ]] ; then
-    if screen -qR ; then
-        exit 0
+    scrlist=( 
+        $(ls -1 /tmp/uscreens/S-$USER/ 2>/dev/null)
+        'New screen session'
+        'Drop to shell'
+    )
+    screen=
+    noscr=
+
+    if (( ${#scrlist[@]} > 0 )) ; then
+        echo "Existing screens available, reconnect?:"
+        echo
+
+        select x in "${scrlist[@]}" ; do
+            if [[ ! $x ]] ; then
+                continue
+            fi
+
+            case $x in
+            (Drop*) noscr=1 ;;
+            (New*) ;;
+            (*) screen=$x ;;
+            esac
+            break
+        done
+    fi
+
+    if [[ ! $noscr ]] ; then
+        if [[ $screen ]] ; then
+            screen -d $screen || true
+        fi
+
+        set +x
+        unset BASH_XTRACEFD
+        exec 3>&-
+
+        if screen ${screen:+-r $screen} ; then
+            exit 0
+        fi
     fi
 fi
-
-exec 3>~/.bashrc.log
-BASH_XTRACEFD=3
-set -x
 
 shopt -s extglob
 
@@ -95,11 +135,6 @@ if [[ -t 0 ]] ; then
                 fi
             fi
         fi
-    fi
-
-    if (( $(ls -1 2>/dev/null /tmp/uscreens/S-$USER | wc -l) > 1 )) ; then
-        echo Other screen sessions:
-        printf "    %s\n" $(\cd /tmp/uscreens/S-$USER && echo !($STY))
     fi
 fi
 

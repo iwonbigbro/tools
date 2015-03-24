@@ -52,6 +52,10 @@ if [[ ! $STY && -t 0 ]] ; then
         if screen ${screen:+-r $screen} ; then
             exit 0
         fi
+
+        exec 3>>~/.bashrc.log
+        BASH_XTRACEFD=3
+        set -x
     fi
 fi
 

@@ -95,3 +95,18 @@ if &diff
         autocmd VimLeave * call system('screen -X layout remove diffview')
     endif
 endif
+
+let g:lightline = {
+      \ 'active': {
+      \   'left': [
+      \     [ 'mode', 'paste' ],
+      \     [ 'readonly', 'absolutepath', 'modified' ]
+      \   ]
+      \ },
+      \ 'component_visible_condition': {
+      \   'readonly': '(&filetype!="help"&& &readonly)',
+      \   'modified': '(&filetype!="help"&&(&modified||!&modifiable))'
+      \ }
+      \ }
+
+let g:pymode_doc = 0

@@ -59,7 +59,7 @@ function setup_vim() {
     git clone https://github.com/vim-scripts/minibufexplorerpp.git \
         $HOME/.vim/bundle/minibufexplorerpp
 
-    git clone https://github.com/w0ng/vim-hybrid.git \
+    git clone https://github.com/iwonbigbro/vim-hybrid.git \
         $HOME/.vim/bundle/vim-hybrid
 
     git clone https://github.com/scrooloose/syntastic.git \

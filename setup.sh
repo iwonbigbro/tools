@@ -64,6 +64,12 @@ function setup_vim() {
 
     git clone https://github.com/scrooloose/syntastic.git \
         $HOME/.vim/bundle/syntastic
+
+    git clone https://github.com/klen/python-mode.git \
+        $HOME/.vim/bundle/python-mode
+
+    git clone https://github.com/fs111/pydoc.vim.git \
+        $HOME/.vim/bundle/pydoc-vim
 }
 
 function setup_bash() {

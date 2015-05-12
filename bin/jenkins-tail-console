@@ -1,0 +1,59 @@
+#!/bin/bash
+
+set -eu
+
+jobname=$1
+build=$2
+url_base="http://d-buildmaster-01:8080/job/$jobname"
+url="$url_base/$build/consoleText"
+
+SECONDS=0
+
+unset http_proxy
+
+if ! wget -q -O - "$url_base/" >/dev/null ; then
+    echo >&2 "Error: Invalid job: $jobname"
+    exit 1
+fi
+
+while ! wget -q -O - "$url" >/dev/null ; do
+    if (( SECONDS > ${TIMEOUT:-600} )) ; then
+        echo
+        echo >&2 "Error: Timed out waiting for $jobname/$build to start"
+        exit 1
+    fi
+
+    printf "\rWaiting for %s/%s to start (%d seconds)..." \
+        "$jobname" "$build" $SECONDS
+
+    sleep 10
+done
+
+echo
+echo "Build started, waiting for output..."
+
+finished=0
+lines=()
+
+while true ; do
+    offset=${#lines[@]:-}
+
+    mapfile -t -s $offset -O $offset lines < \
+        <(wget -q -O - "$url")
+
+    for (( i=$offset ; i<${#lines[@]:-} ; i++ )) ; do
+        echo "${lines[i]}"
+    done
+
+    offset=${#lines[@]:-}
+
+    if [[ ${lines[offset-1]:-} == "Finished:"* ]] ; then
+        break
+    fi
+
+    sleep 2
+done
+
+if [[ ${PERSISTENT_TAILBUILD:-} == 1 ]] ; then
+    exec "$0" "$jobname" $(( $build + 1 ))
+fi

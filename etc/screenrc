@@ -4,34 +4,12 @@ attrcolor b ".I"
 termcapinfo xterm 'Co#256:AB=\E[48;5;%dm:AF=\E[38;5;%dm'
 defbce "on"
 
-# Layout for diff view
-layout save diffview
-
-# Layout 3x2
-layout new 3x2
 bind h focus left
 bind j focus down
 bind k focus up
 bind l focus right
 
-split -v
-split -v
-split
-screen
-focus
-screen
-focus
-split
-screen
-focus
-screen
-focus
-split
-screen
-focus
-screen
-focus
-
-layout save 3x2
+# Layout for diff view
+layout save diffview
 layout new fs
 select 0

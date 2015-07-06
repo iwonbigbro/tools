@@ -17,7 +17,19 @@ export MANPATH=$HOME/share/man:$MANPATH
 
 if [[ ! $STY && -t 0 ]] ; then
     scrlist=( 
-        $(ls -1 /tmp/uscreens/S-$USER/ 2>/dev/null)
+        $(
+            socketdirs=(
+                $HOME/.screen
+                /run/screens/S-$USER
+                /tmp/uscreens/S-$USER
+            )
+
+            for d in "${socketdirs[@]}" ; do
+                if [[ -d $d ]] ; then
+                    ls -1 2>/dev/null $d/
+                fi
+            done
+        )
         'New screen session'
         'Drop to shell'
     )

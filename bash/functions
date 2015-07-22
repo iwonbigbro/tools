@@ -174,6 +174,10 @@ function myprompt() {
         dir="~${dir#${HOME}}"
     }
 
+    if [[ ${STY:-} ]] ; then
+        screen -S $STY -X title "${LOGNAME:-$USER}@${HOSTNAME%%.*}:$dir"
+    fi
+
     printf "$_NORMAL"
 
     if [[ ! $__MYPROMPT_HIDETIME ]] ; then

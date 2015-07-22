@@ -1,37 +1,22 @@
 startup_message off
+defscrollback 5000
 term "screen-256color"
 attrcolor b ".I"
-termcapinfo xterm 'Co#256:AB=\E[48;5;%dm:AF=\E[38;5;%dm'
-defbce "on"
+termcapinfo xterm 'Co#256:AB=\E[48;5;%dm:AF=\E[38;5;%dm:VE='
+defbce on
+vbell off
 
-# Layout for diff view
-layout save diffview
-
-# Layout 3x2
-layout new 3x2
 bind h focus left
 bind j focus down
 bind k focus up
 bind l focus right
 
-split -v
-split -v
-split
-screen
-focus
-screen
-focus
-split
-screen
-focus
-screen
-focus
-split
-screen
-focus
-screen
-focus
+logfile "$HOME/.screenlog.%S.%n"
+deflog on
 
-layout save 3x2
+hardstatus alwayslastline
+hardstatus string '%{= kG}[%{G}%H] [%= %{= kw}%?%-w%?%{g}%n %f%t%?(%u)%?%{w}%?%+w%?%?%= %{g}] [%Y/%m/%d %c:%s]'
+
+# Layout for diff view
+layout new diffview
 layout new fs
-select 0

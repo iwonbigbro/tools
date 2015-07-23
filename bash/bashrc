@@ -30,7 +30,7 @@ if [[ ! $STY && -t 0 ]] ; then
 
                 for d in "${socketdirs[@]}" ; do
                     if [[ -d $d ]] ; then
-                        ls -1 2>/dev/null $d/
+                        ls -1 2>/dev/null $d/ | grep -v ^hardcopy
                     fi
                 done
             )

@@ -11,11 +11,10 @@ bind j focus down
 bind k focus up
 bind l focus right
 
-logfile "$HOME/.screenlog.%S.%n"
-deflog on
+#logfile "$HOME/.screenlog.%S.%n"
+#deflog on
 
-hardstatus alwayslastline
-hardstatus string '%{= kG}[%{G}%H] [%= %{= kw}%?%-w%?%{g}%n %f%t%?(%u)%?%{w}%?%+w%?%?%= %{g}] [%Y/%m/%d %c:%s]'
+caption always '%{= Gk}%0c:%0s %{= Bk} %n %t %{= bw} %?%W%?'
 
 # Layout for diff view
 layout new diffview

@@ -125,14 +125,21 @@ function mychdir() {
         __MYSETPROMPT_FS="$(df -TP . | awk '$NF ~ /^\// { print $2 }')"
         __MYSETPROMPT_HOME=$(df -P $HOME | awk '$1 ~ /^\// { print "'$(hostname -s)'" ; exit 0 }')
 
-        export PS1='$(myprompt)'
+        export PROMPT_COMMAND='myprompt_command "$(history 1)"'
+        export PS1='$(myprompt $? \!)'
         export PS2='> '
     }
     return 0
 }
 
+function myprompt_command() {
+    if [[ $STY ]] ; then
+        screen -S "$STY" -X title "${PWD/$HOME/\~}"
+    fi
+}
+
 function myprompt() {
-    ret=$?
+    local ret=$1
 
     # set colour of output
     if [[ $UID == 0 || ${LOGNAME:-$USER} == "root" ]] ; then
@@ -175,7 +182,8 @@ function myprompt() {
     }
 
     if [[ ${STY:-} ]] ; then
-        screen -S $STY -X title "${LOGNAME:-$USER}@${HOSTNAME%%.*}:$dir"
+        #screen -S $STY -X title "${LOGNAME:-$USER}@${HOSTNAME%%.*}:$dir"
+        true
     fi
 
     printf "$_NORMAL"
@@ -254,16 +262,6 @@ ERR
     }
 
     [[ ! -s $e ]] || rm -f $e
-}
-
-function myprompt_command() {
-    # Append current history buffer to the history file
-    history_stat && {
-        /bin/cp $HOME/.bash_history{,.$HOSTNAME.$$}
-        history -a
-    }
-
-    echo -ne "\033]0;$USER@$HOSTNAME:$PWD\007"
 }
 
 function echo_status() {

@@ -134,7 +134,8 @@ function mychdir() {
 
 function myprompt_command() {
     if [[ $STY ]] ; then
-        screen -S "$STY" -X title "${PWD/$HOME/\~}"
+        local t="~"
+        screen -S "$STY" -X title "${PWD/$HOME/$t}"
     fi
 }
 

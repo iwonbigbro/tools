@@ -19,7 +19,7 @@ if [[ ! $STY && -t 0 ]] ; then
     screen=
     noscr=
 
-    if [[ $SCREEN_NEW == 1 ]] ; then
+    if [[ $SCREEN_NEW != 1 ]] ; then
         scrlist=( 
             $(
                 socketdirs=(

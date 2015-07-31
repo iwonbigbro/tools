@@ -14,7 +14,7 @@ bind l focus right
 #logfile "$HOME/.screenlog.%S.%n"
 #deflog on
 
-caption always '%{= Gk}%0c:%0s %{= Bk} %n %t %{= bw} %?%W%?'
+caption always '%{= Gk} %0c %{= Bk} %n %t %{= bw} %?%W%?'
 
 # Layout for diff view
 layout new diffview

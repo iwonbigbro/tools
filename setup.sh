@@ -70,6 +70,9 @@ function setup_vim() {
 
     git clone https://github.com/fs111/pydoc.vim.git \
         $HOME/.vim/bundle/pydoc-vim
+
+    git clone https:://github.com/chase/vim-ansible-yaml.git \
+        $HOME/.vim/bundle/vim-ansible-yaml
 }
 
 function setup_bash() {

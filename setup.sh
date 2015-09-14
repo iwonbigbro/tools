@@ -2,9 +2,20 @@
 
 # Copyright (C) 2015 Craig Phillips.  All rights reserved.
 
-set -eu
+set -euo pipefail
+shopt -s extglob
 
-setup_sh=$(readlink -f "$BASH_SOURCE")
+if [[ -d /private/etc ]] ; then
+    if ! readlink=$(which greadlink) ; then
+        echo >&2 "error: install GNU coreutils"
+        echo >&2 "  brew install coreutils"
+        exit 1
+    fi
+else
+    readlink=$(which readlink)
+fi
+
+setup_sh=$($readlink -f "$BASH_SOURCE")
 
 exec 3>&1
 
@@ -44,8 +55,7 @@ function setup_vim() {
     rm -rf $HOME/.vim $HOME/.vimrc
 
     mkdir -p $HOME/.vim/autoload $HOME/.vim/bundle
-    wget -O $HOME/.vim/autoload/pathogen.vim \
-    	--no-check-certificate \
+    curl -k -o $HOME/.vim/autoload/pathogen.vim \
     	"https://raw.githubusercontent.com/tpope/vim-pathogen/master/autoload/pathogen.vim"
 
     install -vm 0640 ${setup_sh%/*}/etc/vimrc $HOME/.vimrc
